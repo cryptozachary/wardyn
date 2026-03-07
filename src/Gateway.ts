@@ -8,6 +8,9 @@ import { Message } from "./types.js";
 import { loadKeys, storeKey } from "./security/keyVault.js";
 import { sendTelegramReply, extractChatId } from "./channels/telegram.js";
 import { sendDiscordReply, extractChannelId } from "./channels/discord.js";
+import { attachWebSocket } from "./channels/websocket.js";
+import { loadHeartbeatConfig, startHeartbeat } from "./orchestrator/heartbeat.js";
+import { createServer } from "http";
 import dotenv from "dotenv";
 dotenv.config();
 
@@ -60,8 +63,9 @@ setInterval(() => {
   }
 }, 300_000).unref();
 
-// Serve static setup UI
+// Serve static UI
 app.use("/ui", express.static(path.join(process.cwd(), "public")));
+app.get("/chat", (_req, res) => res.sendFile(path.join(process.cwd(), "public", "chat.html")));
 function normalizeTelegram(body: any): Message {
   return { id: String(body.update_id ?? Date.now()), channel: "telegram", userId: String(body.message?.from?.id ?? "unknown"), text: body.message?.text ?? "", ts: Date.now() };
 }
@@ -143,4 +147,23 @@ app.post('/webhook/discord', rateLimit, requireAuth, async (req, res) => {
   }
 });
 app.get('/health', (_req, res) => res.json({ ok: true }));
-app.listen(PORT, HOST, () => console.log(`Secure-Claw Gateway listening on http://${HOST}:${PORT}`));
+
+// Create HTTP server shared by Express and WebSocket
+const server = createServer(app);
+
+// Attach WebSocket control plane
+attachWebSocket(server, skills, () => getKeys()["openai"], API_TOKEN);
+
+// Start heartbeat scheduler
+const heartbeatJobs = loadHeartbeatConfig();
+if (heartbeatJobs.length > 0) {
+  startHeartbeat(heartbeatJobs, skills, () => getKeys()["openai"]);
+}
+
+server.listen(PORT, HOST, () => {
+  console.log(`Secure-Claw Gateway listening on http://${HOST}:${PORT}`);
+  console.log(`WebSocket available at ws://${HOST}:${PORT}/ws`);
+  if (heartbeatJobs.length > 0) {
+    console.log(`Heartbeat: ${heartbeatJobs.length} job(s) scheduled`);
+  }
+});

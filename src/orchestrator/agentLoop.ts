@@ -1,4 +1,4 @@
-import { Message, ToolCall, ToolResult, SkillMeta } from "../types.js";
+import { Message, ToolCall, ToolResult, SkillMeta, OnStream } from "../types.js";
 import { readFileSync, appendFileSync, mkdirSync, existsSync } from "fs";
 import path from "path";
 import { callLLM } from "../llm/openai.js";
@@ -21,7 +21,12 @@ function log(sessionId: string, data: any) {
   appendFileSync(path.join(logDir, `${sanitizeId(sessionId)}.log`), JSON.stringify(data) + "\n");
 }
 
-export async function runAgentLoop(msg: Message, tools: SkillMeta[], providerKey: string) {
+export async function runAgentLoop(
+  msg: Message,
+  tools: SkillMeta[],
+  providerKey: string,
+  onStream?: OnStream
+) {
   const ctx = loadContext();
   const toolDefs = tools.map(t => ({ name: t.name, description: t.description }));
   const toolList = tools.map(t => `- ${t.name}: ${t.description}`).join("\n");
@@ -36,10 +41,13 @@ export async function runAgentLoop(msg: Message, tools: SkillMeta[], providerKey
   let iterations = 0;
 
   while (iterations++ < 8) {
+    onStream?.({ type: "thinking", iteration: iterations });
+
     const llmResponse = await callLLM({ messages, tools: toolDefs }, providerKey);
 
     if (!llmResponse.tool_calls) {
       log(msg.id, { final: llmResponse.text, toolResults });
+      onStream?.({ type: "final", text: llmResponse.text });
       return { final: llmResponse.text, toolResults };
     }
 
@@ -56,6 +64,9 @@ export async function runAgentLoop(msg: Message, tools: SkillMeta[], providerKey
         name: tc.function.name,
         args: JSON.parse(tc.function.arguments || "{}")
       };
+
+      onStream?.({ type: "tool_call", name: parsed.name, args: parsed.args });
+
       const skill = tools.find(t => t.name === parsed.name);
 
       let output = "";
@@ -73,6 +84,7 @@ export async function runAgentLoop(msg: Message, tools: SkillMeta[], providerKey
       }
 
       toolResults.push({ name: parsed.name, output, error });
+      onStream?.({ type: "tool_result", name: parsed.name, output, error });
 
       messages.push({
         role: "tool",
@@ -83,6 +95,7 @@ export async function runAgentLoop(msg: Message, tools: SkillMeta[], providerKey
   }
 
   log(msg.id, { final: "Stopped: iteration limit reached.", toolResults });
+  onStream?.({ type: "final", text: "Stopped: iteration limit reached." });
   return { final: "Stopped: iteration limit reached.", toolResults };
 }
 

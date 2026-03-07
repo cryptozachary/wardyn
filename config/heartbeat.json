@@ -1,0 +1,14 @@
+[
+  {
+    "name": "health-check",
+    "cron": "every 30m",
+    "prompt": "Run a self-diagnostic. Check that all skills are loaded and report any issues.",
+    "enabled": false
+  },
+  {
+    "name": "daily-summary",
+    "cron": "every 24h",
+    "prompt": "Summarize the activity from the last 24 hours based on log files in the logs directory.",
+    "enabled": false
+  }
+]
