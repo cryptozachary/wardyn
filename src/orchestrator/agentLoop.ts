@@ -48,7 +48,7 @@ export async function runAgentLoop(
   }
 
   const ctx = loadContext();
-  const toolDefs = tools.map(t => ({ name: t.name, description: t.description }));
+  const toolDefs = tools.map(t => ({ name: t.name, description: t.description, parameters: t.parameters }));
   const toolList = tools.map(t => `- ${t.name}: ${t.description}`).join("\n");
   const systemPrompt = `${ctx.soul}\n\n${ctx.memory}\n\nAvailable tools:\n${toolList}`;
 

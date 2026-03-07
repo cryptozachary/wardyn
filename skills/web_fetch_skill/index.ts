@@ -1,5 +1,17 @@
 import axios from "axios";
 
+export const parameters = {
+  type: "object",
+  properties: {
+    url: { type: "string", description: "The URL to fetch (must start with http:// or https://)" },
+    method: { type: "string", enum: ["GET", "POST", "PUT", "DELETE"], description: "HTTP method (default: GET)" },
+    headers: { type: "object", description: "Optional HTTP headers" },
+    body: { type: "string", description: "Optional request body" },
+    timeout: { type: "number", description: "Request timeout in ms (default: 10000, max: 30000)" }
+  },
+  required: ["url"]
+};
+
 const MAX_BODY = 4000;
 const DEFAULT_TIMEOUT = 10_000;
 

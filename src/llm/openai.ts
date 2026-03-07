@@ -3,6 +3,7 @@ import axios from "axios";
 interface ToolDef {
   name: string;
   description?: string;
+  parameters?: Record<string, unknown>;
 }
 
 interface ChatMessage {
@@ -29,7 +30,7 @@ export async function callLLM(payload: CallPayload, apiKey: string) {
         function: {
           name: t.name,
           description: t.description ?? "Skill tool",
-          parameters: { type: "object", properties: {}, additionalProperties: true }
+          parameters: t.parameters ?? { type: "object", properties: {}, additionalProperties: true }
         }
       })) : undefined
     }, { headers: { Authorization: `Bearer ${apiKey}` } });

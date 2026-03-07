@@ -2,6 +2,22 @@ import { chromium, Browser, Page } from "playwright";
 import { promises as fs } from "fs";
 import path from "path";
 
+export const parameters = {
+  type: "object",
+  properties: {
+    action: {
+      type: "string",
+      enum: ["navigate", "screenshot", "click", "type", "evaluate", "read_text", "close"],
+      description: "The browser action to perform"
+    },
+    url: { type: "string", description: "URL to navigate to (required for 'navigate')" },
+    selector: { type: "string", description: "CSS selector (required for 'click' and 'type', optional for 'screenshot' and 'read_text')" },
+    text: { type: "string", description: "Text to type (required for 'type')" },
+    script: { type: "string", description: "JavaScript to evaluate (required for 'evaluate')" }
+  },
+  required: ["action"]
+};
+
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const SCREENSHOT_DIR = path.join(process.cwd(), "sandbox", "screenshots");
 
