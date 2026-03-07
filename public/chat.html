@@ -78,8 +78,15 @@
 let mode = 'ws';
 let ws = null;
 let sending = false;
-let currentSessionId = null;
-let httpSessionId = null;
+let currentSessionId = localStorage.getItem('secureclaw_ws_session') || null;
+let httpSessionId = localStorage.getItem('secureclaw_http_session') || null;
+
+function persistSession() {
+  if (currentSessionId) localStorage.setItem('secureclaw_ws_session', currentSessionId);
+  else localStorage.removeItem('secureclaw_ws_session');
+  if (httpSessionId) localStorage.setItem('secureclaw_http_session', httpSessionId);
+  else localStorage.removeItem('secureclaw_http_session');
+}
 
 const msgContainer = document.getElementById('messages');
 const input = document.getElementById('input');
@@ -145,7 +152,11 @@ input.addEventListener('input', () => {
 function connectWs() {
   if (ws) { ws.close(); ws = null; }
   const token = getToken();
-  const url = `ws://${location.hostname}:${location.port}/ws` + (token ? `?token=${encodeURIComponent(token)}` : '');
+  const params = new URLSearchParams();
+  if (token) params.set('token', token);
+  if (currentSessionId) params.set('sessionId', currentSessionId);
+  const qs = params.toString();
+  const url = `ws://${location.hostname}:${location.port}/ws` + (qs ? `?${qs}` : '');
   setStatus('', 'connecting...');
 
   ws = new WebSocket(url);
@@ -165,13 +176,16 @@ function connectWs() {
 
     switch (data.type) {
       case 'connected':
-        if (data.sessionId) {
+        // Only adopt server's session ID if we don't already have one persisted
+        if (!currentSessionId && data.sessionId) {
           currentSessionId = data.sessionId;
+          persistSession();
           updateSessionLabel();
         }
         break;
       case 'session':
         currentSessionId = data.sessionId;
+        persistSession();
         updateSessionLabel();
         clearMessages();
         addMsg('New session started', 'system');
@@ -189,6 +203,7 @@ function connectWs() {
         addMsg(data.text ?? '(no response)', 'assistant');
         if (data.sessionId) {
           currentSessionId = data.sessionId;
+          persistSession();
           updateSessionLabel();
         }
         setDisabled(false);
@@ -240,6 +255,7 @@ async function sendHttp(text) {
 
     if (data.sessionId) {
       httpSessionId = data.sessionId;
+      persistSession();
       updateSessionLabel();
     }
 
@@ -265,9 +281,12 @@ async function sendHttp(text) {
 // --- New Session ---
 newSessionBtn.addEventListener('click', () => {
   if (mode === 'ws' && ws && ws.readyState === WebSocket.OPEN) {
+    currentSessionId = null;
+    persistSession();
     ws.send(JSON.stringify({ type: 'new_session' }));
   } else {
     httpSessionId = null;
+    persistSession();
     clearMessages();
     addMsg('New session started', 'system');
     updateSessionLabel();

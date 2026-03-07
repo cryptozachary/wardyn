@@ -20,17 +20,18 @@ export function attachWebSocket(
   const wss = new WebSocketServer({ server, path: "/ws" });
 
   wss.on("connection", (ws, req) => {
+    const connUrl = new URL(req.url ?? "/", `http://${req.headers.host}`);
+
     if (apiToken) {
-      const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
-      const token = url.searchParams.get("token");
+      const token = connUrl.searchParams.get("token");
       if (token !== apiToken) {
         ws.close(4001, "unauthorized");
         return;
       }
     }
 
-    // Default session per connection
-    let sessionId = `ws-${randomUUID()}`;
+    // Resume session from query param or create new one
+    let sessionId = connUrl.searchParams.get("sessionId") || `ws-${randomUUID()}`;
     const userId = "ws-user";
 
     ws.on("message", async (raw) => {
