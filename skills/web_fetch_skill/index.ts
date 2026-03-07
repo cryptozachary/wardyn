@@ -3,6 +3,21 @@ import axios from "axios";
 const MAX_BODY = 4000;
 const DEFAULT_TIMEOUT = 10_000;
 
+function stripHtml(html: string): string {
+  return html
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export async function execute(args: any): Promise<string> {
   const { url, method = "GET", headers = {}, body, timeout = DEFAULT_TIMEOUT } = args;
 
@@ -22,6 +37,12 @@ export async function execute(args: any): Promise<string> {
 
   const contentType = res.headers["content-type"] || "unknown";
   let responseBody = typeof res.data === "string" ? res.data : JSON.stringify(res.data, null, 2);
+
+  // Strip HTML to clean text if the response is HTML
+  if (contentType.includes("text/html")) {
+    responseBody = stripHtml(responseBody);
+  }
+
   if (responseBody.length > MAX_BODY) {
     responseBody = responseBody.slice(0, MAX_BODY) + "\n...(truncated)";
   }

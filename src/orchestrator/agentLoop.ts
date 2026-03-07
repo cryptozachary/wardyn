@@ -85,7 +85,7 @@ export async function runAgentLoop(
   let toolResults: ToolResult[] = [];
   let iterations = 0;
 
-  while (iterations++ < 8) {
+  while (iterations++ < 12) {
     onStream?.({ type: "thinking", iteration: iterations });
 
     const llmResponse = await callLLM({ messages, tools: toolDefs }, providerKey);
