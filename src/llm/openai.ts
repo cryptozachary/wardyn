@@ -17,7 +17,7 @@ interface CallPayload {
   tools?: ToolDef[];
 }
 
-const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
+const MODEL = process.env.OPENAI_MODEL || "gpt-5-mini";
 
 export async function callLLM(payload: CallPayload, apiKey: string) {
   try {

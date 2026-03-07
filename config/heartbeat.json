@@ -1,9 +1,9 @@
 [
   {
     "name": "health-check",
-    "cron": "every 30m",
-    "prompt": "Run a self-diagnostic. Check that all skills are loaded and report any issues.",
-    "enabled": false
+    "cron": "every 1m",
+    "prompt": "Give brief update on bitcoin price.",
+    "enabled": true
   },
   {
     "name": "daily-summary",
