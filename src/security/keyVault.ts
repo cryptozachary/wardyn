@@ -1,11 +1,21 @@
 import { randomBytes, createCipheriv, createDecipheriv, scryptSync } from "crypto";
-import { readFileSync, writeFileSync } from "fs";
+import { readFileSync, writeFileSync, existsSync } from "fs";
 import path from "path";
 const VAULT_PATH = path.join(process.cwd(), "config", "providers.enc");
 export function storeKey(name: string, value: string, passphrase: string) {
+  // Merge with existing vault if present
+  let existing: Record<string, string> = {};
+  if (existsSync(VAULT_PATH)) {
+    try {
+      existing = loadKeys(passphrase);
+    } catch (err) {
+      throw new Error("Failed to decrypt existing vault with provided passphrase");
+    }
+  }
+  const payload = { ...existing, [name]: value };
   const salt = randomBytes(16); const key = scryptSync(passphrase, salt, 32);
   const iv = randomBytes(12); const cipher = createCipheriv("aes-256-gcm", key, iv);
-  const data = Buffer.concat([cipher.update(JSON.stringify({ [name]: value }), "utf8"), cipher.final()]);
+  const data = Buffer.concat([cipher.update(JSON.stringify(payload), "utf8"), cipher.final()]);
   const tag = cipher.getAuthTag();
   writeFileSync(VAULT_PATH, Buffer.concat([salt, iv, tag, data]));
 }

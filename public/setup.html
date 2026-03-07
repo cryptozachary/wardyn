@@ -22,6 +22,12 @@
   <p class="status" id="status">Loading status...</p>
 
   <section>
+    <h2>API Token (optional)</h2>
+    <label>API Token (sent as x-api-token)</label>
+    <input id="apiToken" type="password" placeholder="enter token if server requires it" />
+  </section>
+
+  <section>
     <h2>Store API Key (encrypted)</h2>
     <label>Passphrase (used to encrypt vault)</label>
     <input id="passphrase" type="password" placeholder="enter passphrase" />
@@ -54,14 +60,19 @@
   </section>
 
 <script>
+function authHeaders() {
+  const t = document.getElementById('apiToken').value.trim();
+  return t ? { 'x-api-token': t } : {};
+}
+
 async function fetchStatus(){
-  try{ const r = await fetch('/api/setup/status'); const j = await r.json();
+  try{ const r = await fetch('/api/setup/status', { headers: authHeaders() }); const j = await r.json();
     document.getElementById('status').textContent = j.hasVault ? 'Vault found (providers.enc present).' : 'Vault not created yet.';
   }catch(e){ document.getElementById('status').textContent = 'Status error: '+e; }
 }
 
 async function loadMemory(){
-  try{ const r = await fetch('/api/memory'); const j = await r.json();
+  try{ const r = await fetch('/api/memory', { headers: authHeaders() }); const j = await r.json();
     if(j.memory!==undefined) document.getElementById('memory').value = j.memory;
     if(j.soul!==undefined) document.getElementById('soul').value = j.soul;
   }catch(e){ document.getElementById('memMsg').textContent = 'Load error: '+e; }
@@ -73,7 +84,7 @@ document.getElementById('saveKey').onclick = async () => {
   if(!pass || !key){ document.getElementById('keyMsg').textContent = 'Passphrase and key required.'; return; }
   document.getElementById('saveKey').disabled = true;
   try{
-    const r = await fetch('/api/setup/store-key', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ passphrase: pass, openaiKey: key }) });
+    const r = await fetch('/api/setup/store-key', { method:'POST', headers:{'Content-Type':'application/json', ...authHeaders()}, body: JSON.stringify({ passphrase: pass, openaiKey: key }) });
     const j = await r.json();
     document.getElementById('keyMsg').textContent = j.ok ? 'Saved encrypted vault.' : ('Error: '+j.error);
     fetchStatus();
@@ -86,7 +97,7 @@ document.getElementById('saveMemory').onclick = async () => {
   const soul = document.getElementById('soul').value;
   document.getElementById('saveMemory').disabled = true;
   try{
-    const r = await fetch('/api/memory', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ memory, soul }) });
+    const r = await fetch('/api/memory', { method:'POST', headers:{'Content-Type':'application/json', ...authHeaders()}, body: JSON.stringify({ memory, soul }) });
     const j = await r.json();
     document.getElementById('memMsg').textContent = j.ok ? 'Saved.' : ('Error: '+j.error);
   }catch(e){ document.getElementById('memMsg').textContent = 'Error: '+e; }

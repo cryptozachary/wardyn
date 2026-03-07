@@ -1,6 +1,9 @@
 import { readdirSync, existsSync } from "fs";
 import path from "path";
+import { createRequire } from "module";
 import type { SkillMeta } from "../types.js";
+
+const require = createRequire(import.meta.url);
 
 function resolveSkillsRoot() {
   const distSkills = path.join(process.cwd(), "dist", "skills");

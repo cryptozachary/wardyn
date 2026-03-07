@@ -14,6 +14,22 @@ app.use(bodyParser.json({ limit: "1mb" }));
 const skills = loadSkills();
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = "127.0.0.1";
+const API_TOKEN = process.env.API_TOKEN;
+
+// cache decrypted keys to avoid per-request decrypt
+let cachedKeys: Record<string, string> | null = null;
+function getKeys(): Record<string, string> {
+  if (cachedKeys) return cachedKeys;
+  cachedKeys = loadKeys(process.env.KEY_PASSPHRASE ?? "");
+  return cachedKeys;
+}
+
+function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+  if (!API_TOKEN) return next(); // optional
+  const token = req.get("x-api-token");
+  if (token === API_TOKEN) return next();
+  return res.status(401).json({ ok: false, error: "unauthorized" });
+}
 
 // Serve static setup UI
 app.use("/ui", express.static(path.join(process.cwd(), "public")));
@@ -25,25 +41,26 @@ function normalizeDiscord(body: any): Message {
 }
 
 // --- Setup & configuration endpoints ---
-app.get("/api/setup/status", (_req, res) => {
+app.get("/api/setup/status", requireAuth, (_req, res) => {
   const vaultPath = path.join(process.cwd(), "config", "providers.enc");
   res.json({ hasVault: fs.existsSync(vaultPath) });
 });
 
-app.post("/api/setup/store-key", (req, res) => {
+app.post("/api/setup/store-key", requireAuth, (req, res) => {
   const { passphrase, openaiKey } = req.body || {};
   if (!passphrase || !openaiKey) {
     return res.status(400).json({ ok: false, error: "passphrase and openaiKey required" });
   }
   try {
     storeKey("openai", openaiKey, passphrase);
+    cachedKeys = null;
     res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: err.message });
   }
 });
 
-app.get("/api/memory", (_req, res) => {
+app.get("/api/memory", requireAuth, (_req, res) => {
   try {
     const memory = fs.readFileSync(path.join(process.cwd(), "memory", "MEMORY.md"), "utf8");
     const soul = fs.readFileSync(path.join(process.cwd(), "memory", "SOUL.md"), "utf8");
@@ -53,7 +70,7 @@ app.get("/api/memory", (_req, res) => {
   }
 });
 
-app.post("/api/memory", (req, res) => {
+app.post("/api/memory", requireAuth, (req, res) => {
   const { memory, soul } = req.body || {};
   if (typeof memory !== "string" || typeof soul !== "string") {
     return res.status(400).json({ ok: false, error: "memory and soul must be strings" });
@@ -66,13 +83,25 @@ app.post("/api/memory", (req, res) => {
     res.status(500).json({ ok: false, error: err.message });
   }
 });
-app.post('/webhook/telegram', async (req, res) => {
-  const msg = normalizeTelegram(req.body); const key = loadKeys(process.env.KEY_PASSPHRASE ?? '')['openai'];
-  const result = await runAgentLoop(msg, skills, key); res.json(result);
+app.post('/webhook/telegram', requireAuth, async (req, res) => {
+  try {
+    const msg = normalizeTelegram(req.body);
+    const key = getKeys()['openai'];
+    const result = await runAgentLoop(msg, skills, key);
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
 });
-app.post('/webhook/discord', async (req, res) => {
-  const msg = normalizeDiscord(req.body); const key = loadKeys(process.env.KEY_PASSPHRASE ?? '')['openai'];
-  const result = await runAgentLoop(msg, skills, key); res.json(result);
+app.post('/webhook/discord', requireAuth, async (req, res) => {
+  try {
+    const msg = normalizeDiscord(req.body);
+    const key = getKeys()['openai'];
+    const result = await runAgentLoop(msg, skills, key);
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
 });
 app.get('/health', (_req, res) => res.json({ ok: true }));
 app.listen(PORT, HOST, () => console.log(`Secure-Claw Gateway listening on http://${HOST}:${PORT}`));

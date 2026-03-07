@@ -30,8 +30,3 @@ sandbox/*
 
 # Coverage
 coverage/
-
-# Lock files (optional; unignore the one you use)
-package-lock.json
-pnpm-lock.yaml
-yarn.lock

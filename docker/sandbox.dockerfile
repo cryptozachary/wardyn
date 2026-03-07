@@ -3,4 +3,4 @@ WORKDIR /var/task
 COPY package*.json ./
 RUN npm ci --omit=dev
 COPY . .
-CMD ["node", "dist/Gateway.js"]
+CMD ["node", "dist/src/Gateway.js"]
