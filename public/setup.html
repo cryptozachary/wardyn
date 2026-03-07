@@ -65,6 +65,16 @@ function authHeaders() {
   return t ? { 'x-api-token': t } : {};
 }
 
+function loadToken() {
+  const saved = localStorage.getItem('secureclaw_api_token') || '';
+  document.getElementById('apiToken').value = saved;
+}
+
+function saveToken() {
+  const t = document.getElementById('apiToken').value.trim();
+  localStorage.setItem('secureclaw_api_token', t);
+}
+
 async function fetchStatus(){
   try{ const r = await fetch('/api/setup/status', { headers: authHeaders() }); const j = await r.json();
     document.getElementById('status').textContent = j.hasVault ? 'Vault found (providers.enc present).' : 'Vault not created yet.';
@@ -77,6 +87,10 @@ async function loadMemory(){
     if(j.soul!==undefined) document.getElementById('soul').value = j.soul;
   }catch(e){ document.getElementById('memMsg').textContent = 'Load error: '+e; }
 }
+
+document.getElementById('apiToken').addEventListener('input', () => {
+  saveToken();
+});
 
 document.getElementById('saveKey').onclick = async () => {
   const pass = document.getElementById('passphrase').value.trim();
@@ -110,6 +124,7 @@ document.getElementById('healthBtn').onclick = async () => {
   catch(e){ document.getElementById('healthOut').textContent = 'Error: '+e; }
 };
 
+loadToken();
 fetchStatus();
 loadMemory();
 </script>
