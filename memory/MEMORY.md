@@ -1,1 +1,0 @@
-always start response with: my lord
