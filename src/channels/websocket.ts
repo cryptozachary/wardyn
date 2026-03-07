@@ -5,9 +5,10 @@ import { Message, SkillMeta, OnStream } from "../types.js";
 import { runAgentLoop } from "../orchestrator/agentLoop.js";
 
 interface WsIncoming {
-  type: "message";
-  text: string;
+  type: "message" | "new_session";
+  text?: string;
   userId?: string;
+  sessionId?: string;
 }
 
 export function attachWebSocket(
@@ -19,7 +20,6 @@ export function attachWebSocket(
   const wss = new WebSocketServer({ server, path: "/ws" });
 
   wss.on("connection", (ws, req) => {
-    // Auth check via query param or first message
     if (apiToken) {
       const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
       const token = url.searchParams.get("token");
@@ -28,6 +28,10 @@ export function attachWebSocket(
         return;
       }
     }
+
+    // Default session per connection
+    let sessionId = `ws-${randomUUID()}`;
+    const userId = "ws-user";
 
     ws.on("message", async (raw) => {
       let data: WsIncoming;
@@ -38,15 +42,27 @@ export function attachWebSocket(
         return;
       }
 
+      // Allow client to start a new session
+      if (data.type === "new_session") {
+        sessionId = `ws-${randomUUID()}`;
+        sendJson(ws, { type: "session", sessionId });
+        return;
+      }
+
       if (data.type !== "message" || !data.text) {
         sendJson(ws, { type: "error", error: "expected { type: 'message', text: '...' }" });
         return;
       }
 
+      // Allow client to specify or resume a session
+      if (data.sessionId) {
+        sessionId = data.sessionId;
+      }
+
       const msg: Message = {
         id: randomUUID(),
         channel: "websocket",
-        userId: data.userId ?? "ws-user",
+        userId: data.userId ?? userId,
         text: data.text,
         ts: Date.now()
       };
@@ -58,14 +74,17 @@ export function attachWebSocket(
       };
 
       try {
-        const result = await runAgentLoop(msg, skills, getApiKey(), onStream);
-        sendJson(ws, { type: "final", text: result.final });
+        const result = await runAgentLoop(msg, skills, getApiKey(), {
+          sessionId,
+          onStream
+        });
+        sendJson(ws, { type: "final", text: result.final, sessionId: result.sessionId });
       } catch (err: any) {
         sendJson(ws, { type: "error", error: err.message });
       }
     });
 
-    sendJson(ws, { type: "connected", id: randomUUID() });
+    sendJson(ws, { type: "connected", id: randomUUID(), sessionId });
   });
 
   return wss;

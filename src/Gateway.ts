@@ -10,6 +10,7 @@ import { sendTelegramReply, extractChatId } from "./channels/telegram.js";
 import { sendDiscordReply, extractChannelId } from "./channels/discord.js";
 import { attachWebSocket } from "./channels/websocket.js";
 import { loadHeartbeatConfig, startHeartbeat } from "./orchestrator/heartbeat.js";
+import { listSessions, loadSession, cleanExpiredSessions } from "./orchestrator/sessionStore.js";
 import { createServer } from "http";
 import dotenv from "dotenv";
 dotenv.config();
@@ -120,8 +121,9 @@ app.post('/webhook/telegram', rateLimit, requireAuth, async (req, res) => {
   try {
     const msg = normalizeTelegram(req.body);
     const key = getKeys()['openai'];
-    const result = await runAgentLoop(msg, skills, key);
-    // Send reply back to Telegram if bot token is configured
+    const result = await runAgentLoop(msg, skills, key, {
+      sessionId: `telegram-${msg.userId}`
+    });
     if (result.final && process.env.TELEGRAM_BOT_TOKEN) {
       const chatId = extractChatId(req.body);
       if (chatId) await sendTelegramReply(chatId, result.final);
@@ -135,8 +137,9 @@ app.post('/webhook/discord', rateLimit, requireAuth, async (req, res) => {
   try {
     const msg = normalizeDiscord(req.body);
     const key = getKeys()['openai'];
-    const result = await runAgentLoop(msg, skills, key);
-    // Send reply back to Discord if bot token is configured
+    const result = await runAgentLoop(msg, skills, key, {
+      sessionId: `discord-${msg.userId}`
+    });
     if (result.final && process.env.DISCORD_BOT_TOKEN) {
       const channelId = extractChannelId(req.body);
       if (channelId) await sendDiscordReply(channelId, result.final);
@@ -146,6 +149,19 @@ app.post('/webhook/discord', rateLimit, requireAuth, async (req, res) => {
     res.status(500).json({ ok: false, error: err.message });
   }
 });
+
+// --- Session endpoints ---
+app.get("/api/sessions", requireAuth, (_req, res) => {
+  const userId = _req.query.userId as string | undefined;
+  res.json({ sessions: listSessions(userId) });
+});
+
+app.get("/api/sessions/:id", requireAuth, (req, res) => {
+  const session = loadSession(req.params.id);
+  if (!session) return res.status(404).json({ ok: false, error: "session not found" });
+  res.json(session);
+});
+
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
 // Create HTTP server shared by Express and WebSocket
@@ -159,6 +175,9 @@ const heartbeatJobs = loadHeartbeatConfig();
 if (heartbeatJobs.length > 0) {
   startHeartbeat(heartbeatJobs, skills, () => getKeys()["openai"]);
 }
+
+// Clean expired sessions every hour
+setInterval(() => cleanExpiredSessions(), 3_600_000).unref();
 
 server.listen(PORT, HOST, () => {
   console.log(`Secure-Claw Gateway listening on http://${HOST}:${PORT}`);

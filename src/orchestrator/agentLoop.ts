@@ -3,6 +3,10 @@ import { readFileSync, appendFileSync, mkdirSync, existsSync } from "fs";
 import path from "path";
 import { callLLM } from "../llm/openai.js";
 import { assertSafe } from "../security/safetySpine.js";
+import {
+  Session, SessionMessage,
+  getOrCreateSession, appendToSession, compactIfNeeded, saveSession
+} from "./sessionStore.js";
 
 function loadContext() {
   const memPath = path.join(process.cwd(), "memory", "MEMORY.md");
@@ -21,21 +25,62 @@ function log(sessionId: string, data: any) {
   appendFileSync(path.join(logDir, `${sanitizeId(sessionId)}.log`), JSON.stringify(data) + "\n");
 }
 
+export interface AgentLoopOptions {
+  sessionId?: string;
+  onStream?: OnStream;
+}
+
 export async function runAgentLoop(
   msg: Message,
   tools: SkillMeta[],
   providerKey: string,
-  onStream?: OnStream
+  onStreamOrOpts?: OnStream | AgentLoopOptions
 ) {
+  // Support both old signature (onStream callback) and new options object
+  let sessionId: string | undefined;
+  let onStream: OnStream | undefined;
+
+  if (typeof onStreamOrOpts === "function") {
+    onStream = onStreamOrOpts;
+  } else if (onStreamOrOpts) {
+    sessionId = onStreamOrOpts.sessionId;
+    onStream = onStreamOrOpts.onStream;
+  }
+
   const ctx = loadContext();
   const toolDefs = tools.map(t => ({ name: t.name, description: t.description }));
   const toolList = tools.map(t => `- ${t.name}: ${t.description}`).join("\n");
   const systemPrompt = `${ctx.soul}\n\n${ctx.memory}\n\nAvailable tools:\n${toolList}`;
 
-  const messages: any[] = [
-    { role: "system", content: systemPrompt },
-    { role: "user", content: msg.text }
-  ];
+  // Load or create session
+  const sid = sessionId ?? `${msg.channel}-${msg.userId}`;
+  const session = getOrCreateSession(sid, msg.userId);
+
+  // Compact history if it's getting long
+  await compactIfNeeded(session, providerKey);
+
+  // Build messages: system + summary context + session history + new user message
+  const messages: any[] = [{ role: "system", content: systemPrompt }];
+
+  if (session.summary) {
+    messages.push({
+      role: "system",
+      content: `Conversation summary so far:\n${session.summary}`
+    });
+  }
+
+  // Replay session history (only user/assistant messages, skip tool details for token efficiency)
+  for (const m of session.messages) {
+    if (m.role === "user" || m.role === "assistant") {
+      messages.push({ role: m.role, content: m.content });
+    }
+  }
+
+  // Add the new user message
+  messages.push({ role: "user", content: msg.text });
+
+  // Track in session
+  appendToSession(session, { role: "user", content: msg.text, ts: Date.now() });
 
   let toolResults: ToolResult[] = [];
   let iterations = 0;
@@ -48,7 +93,12 @@ export async function runAgentLoop(
     if (!llmResponse.tool_calls) {
       log(msg.id, { final: llmResponse.text, toolResults });
       onStream?.({ type: "final", text: llmResponse.text });
-      return { final: llmResponse.text, toolResults };
+
+      // Save assistant reply to session
+      appendToSession(session, { role: "assistant", content: llmResponse.text, ts: Date.now() });
+      saveSession(session);
+
+      return { final: llmResponse.text, toolResults, sessionId: sid };
     }
 
     // Append the assistant message with tool_calls
@@ -94,9 +144,14 @@ export async function runAgentLoop(
     }
   }
 
-  log(msg.id, { final: "Stopped: iteration limit reached.", toolResults });
-  onStream?.({ type: "final", text: "Stopped: iteration limit reached." });
-  return { final: "Stopped: iteration limit reached.", toolResults };
+  const finalText = "Stopped: iteration limit reached.";
+  log(msg.id, { final: finalText, toolResults });
+  onStream?.({ type: "final", text: finalText });
+
+  appendToSession(session, { role: "assistant", content: finalText, ts: Date.now() });
+  saveSession(session);
+
+  return { final: finalText, toolResults, sessionId: sid };
 }
 
 function validateArgs(args: any) {

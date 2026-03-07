@@ -8,15 +8,19 @@
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0c162f; color: #e2e8f0; height: 100vh; display: flex; flex-direction: column; }
 
     /* Header */
-    .header { display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: #141d35; border-bottom: 1px solid #1e2d4a; flex-shrink: 0; }
+    .header { display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: #141d35; border-bottom: 1px solid #1e2d4a; flex-shrink: 0; flex-wrap: wrap; }
     .header h1 { font-size: 16px; font-weight: 600; color: #94a3b8; }
-    .toggle-group { display: flex; background: #1e2d4a; border-radius: 6px; overflow: hidden; margin-left: auto; }
+    .toggle-group { display: flex; background: #1e2d4a; border-radius: 6px; overflow: hidden; }
     .toggle-btn { padding: 6px 14px; border: none; background: none; color: #64748b; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.15s; }
     .toggle-btn.active { background: #0f62fe; color: #fff; }
+    .new-session-btn { padding: 6px 12px; border: 1px solid #1e2d4a; border-radius: 6px; background: #1e293b; color: #94a3b8; font-size: 12px; cursor: pointer; }
+    .new-session-btn:hover { background: #2d3a52; color: #e2e8f0; }
+    .header-right { display: flex; align-items: center; gap: 8px; margin-left: auto; }
     .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #475569; flex-shrink: 0; }
     .status-dot.connected { background: #22c55e; }
     .status-dot.error { background: #ef4444; }
     .status-text { font-size: 12px; color: #64748b; }
+    .session-id { font-size: 11px; color: #475569; font-family: monospace; }
 
     /* Config bar */
     .config-bar { display: flex; gap: 8px; padding: 8px 16px; background: #111827; border-bottom: 1px solid #1e2d4a; flex-shrink: 0; }
@@ -50,8 +54,12 @@
       <button class="toggle-btn active" id="btnWs">WebSocket</button>
       <button class="toggle-btn" id="btnHttp">HTTP</button>
     </div>
-    <div class="status-dot" id="statusDot"></div>
-    <span class="status-text" id="statusText">disconnected</span>
+    <button class="new-session-btn" id="newSessionBtn">New Session</button>
+    <div class="header-right">
+      <div class="status-dot" id="statusDot"></div>
+      <span class="status-text" id="statusText">disconnected</span>
+      <span class="session-id" id="sessionLabel"></span>
+    </div>
   </div>
 
   <div class="config-bar">
@@ -67,17 +75,21 @@
 
 <script>
 // --- State ---
-let mode = 'ws'; // 'ws' or 'http'
+let mode = 'ws';
 let ws = null;
 let sending = false;
+let currentSessionId = null;
+let httpSessionId = null;
 
 const msgContainer = document.getElementById('messages');
 const input = document.getElementById('input');
 const sendBtn = document.getElementById('sendBtn');
 const statusDot = document.getElementById('statusDot');
 const statusText = document.getElementById('statusText');
+const sessionLabel = document.getElementById('sessionLabel');
 const btnWs = document.getElementById('btnWs');
 const btnHttp = document.getElementById('btnHttp');
+const newSessionBtn = document.getElementById('newSessionBtn');
 const apiTokenInput = document.getElementById('apiToken');
 
 // --- Persist token ---
@@ -90,6 +102,16 @@ apiTokenInput.addEventListener('input', () => {
 // --- Helpers ---
 function getToken() { return apiTokenInput.value.trim(); }
 
+function shortSession(id) {
+  if (!id) return '';
+  return id.length > 16 ? id.slice(0, 8) + '...' + id.slice(-4) : id;
+}
+
+function updateSessionLabel() {
+  const id = mode === 'ws' ? currentSessionId : httpSessionId;
+  sessionLabel.textContent = id ? shortSession(id) : '';
+}
+
 function addMsg(text, cls) {
   const div = document.createElement('div');
   div.className = 'msg ' + cls;
@@ -97,6 +119,10 @@ function addMsg(text, cls) {
   msgContainer.appendChild(div);
   msgContainer.scrollTop = msgContainer.scrollHeight;
   return div;
+}
+
+function clearMessages() {
+  msgContainer.innerHTML = '';
 }
 
 function setStatus(state, text) {
@@ -139,6 +165,16 @@ function connectWs() {
 
     switch (data.type) {
       case 'connected':
+        if (data.sessionId) {
+          currentSessionId = data.sessionId;
+          updateSessionLabel();
+        }
+        break;
+      case 'session':
+        currentSessionId = data.sessionId;
+        updateSessionLabel();
+        clearMessages();
+        addMsg('New session started', 'system');
         break;
       case 'thinking':
         addMsg(`Thinking... (iteration ${data.iteration})`, 'thinking');
@@ -151,6 +187,10 @@ function connectWs() {
         break;
       case 'final':
         addMsg(data.text ?? '(no response)', 'assistant');
+        if (data.sessionId) {
+          currentSessionId = data.sessionId;
+          updateSessionLabel();
+        }
         setDisabled(false);
         break;
       case 'error':
@@ -173,7 +213,9 @@ function sendWs(text) {
   }
   setDisabled(true);
   addMsg(text, 'user');
-  ws.send(JSON.stringify({ type: 'message', text }));
+  const payload = { type: 'message', text };
+  if (currentSessionId) payload.sessionId = currentSessionId;
+  ws.send(JSON.stringify(payload));
 }
 
 // --- HTTP ---
@@ -190,11 +232,16 @@ async function sendHttp(text) {
     const res = await fetch('/webhook/telegram', {
       method: 'POST',
       headers,
-      body: JSON.stringify({ message: { text, from: { id: 'chat-ui' } } })
+      body: JSON.stringify({ message: { text, from: { id: httpSessionId || 'chat-ui' } } })
     });
     const data = await res.json();
 
     thinkingMsg.remove();
+
+    if (data.sessionId) {
+      httpSessionId = data.sessionId;
+      updateSessionLabel();
+    }
 
     if (data.toolResults?.length) {
       for (const tr of data.toolResults) {
@@ -215,6 +262,18 @@ async function sendHttp(text) {
   setDisabled(false);
 }
 
+// --- New Session ---
+newSessionBtn.addEventListener('click', () => {
+  if (mode === 'ws' && ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'new_session' }));
+  } else {
+    httpSessionId = null;
+    clearMessages();
+    addMsg('New session started', 'system');
+    updateSessionLabel();
+  }
+});
+
 // --- Mode toggle ---
 function setMode(newMode) {
   mode = newMode;
@@ -228,6 +287,7 @@ function setMode(newMode) {
     setStatus('', 'HTTP mode');
   }
 
+  updateSessionLabel();
   addMsg(`Switched to ${mode === 'ws' ? 'WebSocket' : 'HTTP'} mode`, 'system');
 }
 
