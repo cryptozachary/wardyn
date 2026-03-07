@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Secure-Claw Setup</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 960px; margin: 24px auto; padding: 0 12px; color: #0c162f; }
+    h1 { margin-bottom: 8px; }
+    section { border: 1px solid #d7dbe7; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+    label { display: block; margin: 8px 0 4px; font-weight: 600; }
+    input, textarea, button { width: 100%; box-sizing: border-box; }
+    input, textarea { padding: 8px; border-radius: 6px; border: 1px solid #c4ccdd; }
+    button { margin-top: 8px; padding: 10px; border: none; border-radius: 6px; background: #0f62fe; color: #fff; font-weight: 700; cursor: pointer; }
+    button:disabled { background: #9db6ff; cursor: not-allowed; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .status { font-weight: 600; }
+    pre { background: #f5f7fb; padding: 8px; border-radius: 6px; overflow: auto; }
+  </style>
+</head>
+<body>
+  <h1>Secure-Claw Setup</h1>
+  <p class="status" id="status">Loading status...</p>
+
+  <section>
+    <h2>Store API Key (encrypted)</h2>
+    <label>Passphrase (used to encrypt vault)</label>
+    <input id="passphrase" type="password" placeholder="enter passphrase" />
+    <label>OpenAI API Key</label>
+    <input id="openaiKey" type="password" placeholder="sk-..." />
+    <button id="saveKey">Encrypt & Save</button>
+    <p id="keyMsg"></p>
+  </section>
+
+  <section>
+    <h2>Memory & Soul</h2>
+    <div class="row">
+      <div>
+        <label>MEMORY.md</label>
+        <textarea id="memory" rows="12"></textarea>
+      </div>
+      <div>
+        <label>SOUL.md</label>
+        <textarea id="soul" rows="12"></textarea>
+      </div>
+    </div>
+    <button id="saveMemory">Save Memory Files</button>
+    <p id="memMsg"></p>
+  </section>
+
+  <section>
+    <h2>Health Check</h2>
+    <button id="healthBtn">Ping /health</button>
+    <pre id="healthOut"></pre>
+  </section>
+
+<script>
+async function fetchStatus(){
+  try{ const r = await fetch('/api/setup/status'); const j = await r.json();
+    document.getElementById('status').textContent = j.hasVault ? 'Vault found (providers.enc present).' : 'Vault not created yet.';
+  }catch(e){ document.getElementById('status').textContent = 'Status error: '+e; }
+}
+
+async function loadMemory(){
+  try{ const r = await fetch('/api/memory'); const j = await r.json();
+    if(j.memory!==undefined) document.getElementById('memory').value = j.memory;
+    if(j.soul!==undefined) document.getElementById('soul').value = j.soul;
+  }catch(e){ document.getElementById('memMsg').textContent = 'Load error: '+e; }
+}
+
+document.getElementById('saveKey').onclick = async () => {
+  const pass = document.getElementById('passphrase').value.trim();
+  const key = document.getElementById('openaiKey').value.trim();
+  if(!pass || !key){ document.getElementById('keyMsg').textContent = 'Passphrase and key required.'; return; }
+  document.getElementById('saveKey').disabled = true;
+  try{
+    const r = await fetch('/api/setup/store-key', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ passphrase: pass, openaiKey: key }) });
+    const j = await r.json();
+    document.getElementById('keyMsg').textContent = j.ok ? 'Saved encrypted vault.' : ('Error: '+j.error);
+    fetchStatus();
+  }catch(e){ document.getElementById('keyMsg').textContent = 'Error: '+e; }
+  document.getElementById('saveKey').disabled = false;
+};
+
+document.getElementById('saveMemory').onclick = async () => {
+  const memory = document.getElementById('memory').value;
+  const soul = document.getElementById('soul').value;
+  document.getElementById('saveMemory').disabled = true;
+  try{
+    const r = await fetch('/api/memory', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ memory, soul }) });
+    const j = await r.json();
+    document.getElementById('memMsg').textContent = j.ok ? 'Saved.' : ('Error: '+j.error);
+  }catch(e){ document.getElementById('memMsg').textContent = 'Error: '+e; }
+  document.getElementById('saveMemory').disabled = false;
+};
+
+document.getElementById('healthBtn').onclick = async () => {
+  document.getElementById('healthOut').textContent = 'Checking...';
+  try{ const r = await fetch('/health'); const t = await r.text(); document.getElementById('healthOut').textContent = t; }
+  catch(e){ document.getElementById('healthOut').textContent = 'Error: '+e; }
+};
+
+fetchStatus();
+loadMemory();
+</script>
+</body>
+</html>

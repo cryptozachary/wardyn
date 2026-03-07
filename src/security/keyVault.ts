@@ -1,0 +1,17 @@
+import { randomBytes, createCipheriv, createDecipheriv, scryptSync } from "crypto";
+import { readFileSync, writeFileSync } from "fs";
+import path from "path";
+const VAULT_PATH = path.join(process.cwd(), "config", "providers.enc");
+export function storeKey(name: string, value: string, passphrase: string) {
+  const salt = randomBytes(16); const key = scryptSync(passphrase, salt, 32);
+  const iv = randomBytes(12); const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const data = Buffer.concat([cipher.update(JSON.stringify({ [name]: value }), "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  writeFileSync(VAULT_PATH, Buffer.concat([salt, iv, tag, data]));
+}
+export function loadKeys(passphrase: string): Record<string, string> {
+  const buf = readFileSync(VAULT_PATH);
+  const salt = buf.subarray(0,16), iv = buf.subarray(16,28), tag = buf.subarray(28,44), data = buf.subarray(44);
+  const key = scryptSync(passphrase, salt, 32); const decipher = createDecipheriv("aes-256-gcm", key, iv); decipher.setAuthTag(tag);
+  const json = Buffer.concat([decipher.update(data), decipher.final()]).toString("utf8"); return JSON.parse(json);
+}
