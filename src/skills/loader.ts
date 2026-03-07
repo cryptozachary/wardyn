@@ -1,4 +1,4 @@
-import { readdirSync, existsSync } from "fs";
+import { readdirSync, readFileSync, existsSync } from "fs";
 import path from "path";
 import { createRequire } from "module";
 import type { SkillMeta } from "../types.js";
@@ -22,6 +22,11 @@ export function loadSkills(root = resolveSkillsRoot()): SkillMeta[] {
         if (existsSync(jsPath)) ({ execute } = require(jsPath));
         else if (existsSync(tsPath)) ({ execute } = require(tsPath));
       } catch {}
-      return { name: dir.name, description: `Skill at ${dir.name}`, path: skillPath, execute };
+      let description = `Skill at ${dir.name}`;
+      const mdPath = path.join(skillPath, "SKILL.md");
+      if (existsSync(mdPath)) {
+        try { description = readFileSync(mdPath, "utf8").trim(); } catch {}
+      }
+      return { name: dir.name, description, path: skillPath, execute };
     });
 }

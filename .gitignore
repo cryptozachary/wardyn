@@ -17,7 +17,7 @@ config/providers.enc
 
 # Logs
 logs/*.log
-
+.claude
 # OS / editor
 .DS_Store
 Thumbs.db

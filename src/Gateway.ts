@@ -6,6 +6,8 @@ import { loadSkills } from "./skills/loader.js";
 import { runAgentLoop } from "./orchestrator/agentLoop.js";
 import { Message } from "./types.js";
 import { loadKeys, storeKey } from "./security/keyVault.js";
+import { sendTelegramReply, extractChatId } from "./channels/telegram.js";
+import { sendDiscordReply, extractChannelId } from "./channels/discord.js";
 import dotenv from "dotenv";
 dotenv.config();
 
@@ -30,6 +32,33 @@ function requireAuth(req: express.Request, res: express.Response, next: express.
   if (token === API_TOKEN) return next();
   return res.status(401).json({ ok: false, error: "unauthorized" });
 }
+
+// Simple in-memory rate limiter
+const RATE_WINDOW_MS = 60_000;
+const RATE_MAX = Number(process.env.RATE_LIMIT) || 30;
+const hits = new Map<string, number[]>();
+
+function rateLimit(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const ip = req.ip ?? "unknown";
+  const now = Date.now();
+  const timestamps = (hits.get(ip) ?? []).filter(t => now - t < RATE_WINDOW_MS);
+  if (timestamps.length >= RATE_MAX) {
+    return res.status(429).json({ ok: false, error: "rate limit exceeded" });
+  }
+  timestamps.push(now);
+  hits.set(ip, timestamps);
+  return next();
+}
+
+// Clean up stale entries every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, timestamps] of hits) {
+    const active = timestamps.filter(t => now - t < RATE_WINDOW_MS);
+    if (active.length === 0) hits.delete(ip);
+    else hits.set(ip, active);
+  }
+}, 300_000).unref();
 
 // Serve static setup UI
 app.use("/ui", express.static(path.join(process.cwd(), "public")));
@@ -83,21 +112,31 @@ app.post("/api/memory", requireAuth, (req, res) => {
     res.status(500).json({ ok: false, error: err.message });
   }
 });
-app.post('/webhook/telegram', requireAuth, async (req, res) => {
+app.post('/webhook/telegram', rateLimit, requireAuth, async (req, res) => {
   try {
     const msg = normalizeTelegram(req.body);
     const key = getKeys()['openai'];
     const result = await runAgentLoop(msg, skills, key);
+    // Send reply back to Telegram if bot token is configured
+    if (result.final && process.env.TELEGRAM_BOT_TOKEN) {
+      const chatId = extractChatId(req.body);
+      if (chatId) await sendTelegramReply(chatId, result.final);
+    }
     res.json(result);
   } catch (err: any) {
     res.status(500).json({ ok: false, error: err.message });
   }
 });
-app.post('/webhook/discord', requireAuth, async (req, res) => {
+app.post('/webhook/discord', rateLimit, requireAuth, async (req, res) => {
   try {
     const msg = normalizeDiscord(req.body);
     const key = getKeys()['openai'];
     const result = await runAgentLoop(msg, skills, key);
+    // Send reply back to Discord if bot token is configured
+    if (result.final && process.env.DISCORD_BOT_TOKEN) {
+      const channelId = extractChannelId(req.body);
+      if (channelId) await sendDiscordReply(channelId, result.final);
+    }
     res.json(result);
   } catch (err: any) {
     res.status(500).json({ ok: false, error: err.message });
