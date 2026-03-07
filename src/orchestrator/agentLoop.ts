@@ -92,7 +92,6 @@ export async function runAgentLoop(
 
     if (!llmResponse.tool_calls) {
       log(msg.id, { final: llmResponse.text, toolResults });
-      onStream?.({ type: "final", text: llmResponse.text });
 
       // Save assistant reply to session
       appendToSession(session, { role: "assistant", content: llmResponse.text, ts: Date.now() });
@@ -146,7 +145,6 @@ export async function runAgentLoop(
 
   const finalText = "Stopped: iteration limit reached.";
   log(msg.id, { final: finalText, toolResults });
-  onStream?.({ type: "final", text: finalText });
 
   appendToSession(session, { role: "assistant", content: finalText, ts: Date.now() });
   saveSession(session);

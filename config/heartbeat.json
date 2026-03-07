@@ -1,8 +1,8 @@
 [
   {
     "name": "health-check",
-    "cron": "every 1m",
-    "prompt": "Give brief update on bitcoin price.",
+    "cron": "every 60m",
+    "prompt": "Give brief update on bitcoin price and price action.",
     "enabled": true
   },
   {
