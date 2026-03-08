@@ -13,8 +13,8 @@
     .toggle-group { display: flex; background: #1e2d4a; border-radius: 6px; overflow: hidden; }
     .toggle-btn { padding: 6px 14px; border: none; background: none; color: #64748b; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.15s; }
     .toggle-btn.active { background: #0f62fe; color: #fff; }
-    .new-session-btn { padding: 6px 12px; border: 1px solid #1e2d4a; border-radius: 6px; background: #1e293b; color: #94a3b8; font-size: 12px; cursor: pointer; }
-    .new-session-btn:hover { background: #2d3a52; color: #e2e8f0; }
+    .new-session-btn, .setup-link { padding: 6px 12px; border: 1px solid #1e2d4a; border-radius: 6px; background: #1e293b; color: #94a3b8; font-size: 12px; cursor: pointer; text-decoration: none; }
+    .new-session-btn:hover, .setup-link:hover { background: #2d3a52; color: #e2e8f0; }
     .header-right { display: flex; align-items: center; gap: 8px; margin-left: auto; }
     .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #475569; flex-shrink: 0; }
     .status-dot.connected { background: #22c55e; }
@@ -58,6 +58,7 @@
       <button class="toggle-btn" id="btnHttp">HTTP</button>
     </div>
     <button class="new-session-btn" id="newSessionBtn">New Session</button>
+    <a class="setup-link" href="/ui/setup.html">Setup</a>
     <div class="header-right">
       <span class="provider-tag" id="providerTag"></span>
       <div class="status-dot" id="statusDot"></div>

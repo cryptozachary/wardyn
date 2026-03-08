@@ -11,7 +11,7 @@ import { sendDiscordReply, extractChannelId } from "./channels/discord.js";
 import { attachWebSocket } from "./channels/websocket.js";
 import { loadHeartbeatConfig, startHeartbeat } from "./orchestrator/heartbeat.js";
 import { listSessions, loadSession, cleanExpiredSessions } from "./orchestrator/sessionStore.js";
-import { getProviderName } from "./llm/router.js";
+import { getProviderName, setProviderName } from "./llm/router.js";
 import { createServer } from "http";
 import dotenv from "dotenv";
 dotenv.config();
@@ -103,6 +103,63 @@ app.post("/api/setup/store-key", requireAuth, (req, res) => {
     res.json({ ok: true, provider: providerName });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// --- Provider switching ---
+app.post("/api/setup/provider", requireAuth, (req, res) => {
+  const { provider } = req.body || {};
+  if (!provider || typeof provider !== "string") {
+    return res.status(400).json({ ok: false, error: "provider is required" });
+  }
+  try {
+    setProviderName(provider);
+    cachedKeys = null; // refresh key cache for new provider
+    res.json({ ok: true, provider: getProviderName() });
+  } catch (err: any) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
+});
+
+// --- Ollama config ---
+app.get("/api/ollama/config", requireAuth, (_req, res) => {
+  const cfgPath = path.join(process.cwd(), "config", "ollama.json");
+  try {
+    if (fs.existsSync(cfgPath)) {
+      res.json(JSON.parse(fs.readFileSync(cfgPath, "utf8")));
+    } else {
+      res.json({ url: process.env.OLLAMA_URL || "http://localhost:11434", model: process.env.OLLAMA_MODEL || "llama3.1" });
+    }
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.post("/api/ollama/config", requireAuth, (req, res) => {
+  const { url, model } = req.body || {};
+  if (!url || typeof url !== "string") {
+    return res.status(400).json({ ok: false, error: "url is required" });
+  }
+  try {
+    const cfgDir = path.join(process.cwd(), "config");
+    if (!fs.existsSync(cfgDir)) fs.mkdirSync(cfgDir, { recursive: true });
+    fs.writeFileSync(path.join(cfgDir, "ollama.json"), JSON.stringify({ url, model: model || "llama3.1" }, null, 2), "utf8");
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.post("/api/ollama/ping", requireAuth, async (req, res) => {
+  const { url } = req.body || {};
+  const target = url || "http://localhost:11434";
+  try {
+    const r = await fetch(`${target}/api/tags`);
+    const data = await r.json() as { models?: { name: string }[] };
+    const models = (data.models || []).map((m) => m.name);
+    res.json({ ok: true, models });
+  } catch (err: any) {
+    res.json({ ok: false, error: err.message, models: [] });
   }
 });
 

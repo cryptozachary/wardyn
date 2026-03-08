@@ -39,7 +39,12 @@
     .status-dot.warn { background: #f59e0b; }
     .status-dot.off { background: #475569; }
 
-    .ollama-note { background: #1a332040; border: 1px solid #1a3320; border-radius: 6px; padding: 10px 14px; font-size: 13px; color: #86efac; margin-top: 8px; display: none; }
+    .ollama-panel { background: #1a332020; border: 1px solid #1a3320; border-radius: 8px; padding: 16px; margin-top: 10px; display: none; }
+    .ollama-panel label { color: #86efac; }
+    .ollama-panel input, .ollama-panel select { border-color: #1a3320; }
+    .btn-ollama { background: #166534; }
+    .btn-ollama:hover:not(:disabled) { background: #15803d; }
+    .model-list { font-size: 12px; color: #86efac; margin-top: 6px; }
 
     pre { background: #1e293b; padding: 10px; border-radius: 6px; overflow: auto; font-size: 13px; color: #94a3b8; min-height: 36px; }
 
@@ -66,13 +71,15 @@
     </section>
 
     <section>
-      <h2>LLM Provider Key</h2>
+      <h2>LLM Provider</h2>
       <label>Provider</label>
       <select id="providerSelect">
         <option value="openai">OpenAI</option>
         <option value="anthropic">Anthropic (Claude)</option>
         <option value="ollama">Ollama (local)</option>
       </select>
+      <button id="setProviderBtn" class="btn-secondary" style="margin-top:8px">Set as Active Provider</button>
+      <p class="msg" id="providerMsg"></p>
 
       <div id="keyFields">
         <label>Vault Passphrase</label>
@@ -81,8 +88,17 @@
         <input id="providerKey" type="password" placeholder="sk-..." />
       </div>
 
-      <div class="ollama-note" id="ollamaNote">
-        Ollama runs locally and does not require an API key. Make sure the Ollama server is running at the configured URL (default: http://localhost:11434).
+      <div class="ollama-panel" id="ollamaPanel">
+        <label>Ollama Server URL</label>
+        <input id="ollamaUrl" type="text" placeholder="http://localhost:11434" />
+        <label>Model</label>
+        <select id="ollamaModel">
+          <option value="llama3.1">llama3.1 (default)</option>
+        </select>
+        <button id="ollamaTestBtn" class="btn-ollama">Test Connection & Load Models</button>
+        <p class="model-list" id="ollamaStatus"></p>
+        <button id="ollamaSaveBtn" class="btn-ollama">Save Ollama Config</button>
+        <p class="msg" id="ollamaMsg"></p>
       </div>
 
       <button id="saveKey">Encrypt & Save Key</button>
@@ -142,10 +158,13 @@ document.getElementById('apiToken').addEventListener('input', () => {
 // --- Provider selector ---
 const providerSelect = document.getElementById('providerSelect');
 const keyFields = document.getElementById('keyFields');
-const ollamaNote = document.getElementById('ollamaNote');
 const keyLabel = document.getElementById('keyLabel');
 const providerKeyInput = document.getElementById('providerKey');
 const saveKeyBtn = document.getElementById('saveKey');
+
+const ollamaPanel = document.getElementById('ollamaPanel');
+const ollamaUrlInput = document.getElementById('ollamaUrl');
+const ollamaModelSelect = document.getElementById('ollamaModel');
 
 providerSelect.addEventListener('change', updateProviderUI);
 
@@ -153,12 +172,102 @@ function updateProviderUI() {
   const p = providerSelect.value;
   const isOllama = p === 'ollama';
   keyFields.style.display = isOllama ? 'none' : 'block';
-  ollamaNote.style.display = isOllama ? 'block' : 'none';
-  saveKeyBtn.textContent = isOllama ? 'No Key Needed' : 'Encrypt & Save Key';
-  saveKeyBtn.disabled = isOllama;
+  ollamaPanel.style.display = isOllama ? 'block' : 'none';
+  saveKeyBtn.style.display = isOllama ? 'none' : 'block';
   keyLabel.textContent = providerLabels[p] || 'API Key';
   providerKeyInput.placeholder = providerPlaceholders[p] || '';
+  if (isOllama) loadOllamaConfig();
 }
+
+// --- Set active provider ---
+document.getElementById('setProviderBtn').onclick = async () => {
+  const provider = providerSelect.value;
+  const msg = document.getElementById('providerMsg');
+  try {
+    const r = await fetch('/api/setup/provider', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ provider })
+    });
+    const j = await r.json();
+    if (j.ok) {
+      msg.textContent = `Active provider switched to: ${j.provider}`;
+      msg.className = 'msg ok';
+      fetchProvider(); // refresh the badge in status bar
+    } else {
+      msg.textContent = 'Error: ' + j.error;
+      msg.className = 'msg err';
+    }
+  } catch (e) {
+    msg.textContent = 'Error: ' + e;
+    msg.className = 'msg err';
+  }
+};
+
+async function loadOllamaConfig() {
+  try {
+    const r = await fetch('/api/ollama/config', { headers: authHeaders() });
+    const j = await r.json();
+    ollamaUrlInput.value = j.url || 'http://localhost:11434';
+    // Will set the model after loading models list
+    ollamaModelSelect.dataset.pending = j.model || 'llama3.1';
+  } catch {}
+}
+
+document.getElementById('ollamaTestBtn').onclick = async () => {
+  const url = ollamaUrlInput.value.trim() || 'http://localhost:11434';
+  const status = document.getElementById('ollamaStatus');
+  status.textContent = 'Connecting...';
+  status.className = 'model-list';
+  try {
+    const r = await fetch('/api/ollama/ping', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ url })
+    });
+    const j = await r.json();
+    if (j.ok && j.models.length > 0) {
+      status.textContent = `Connected! ${j.models.length} model(s) available.`;
+      // Populate model dropdown
+      const pending = ollamaModelSelect.dataset.pending || '';
+      ollamaModelSelect.innerHTML = '';
+      for (const m of j.models) {
+        const opt = document.createElement('option');
+        opt.value = m;
+        opt.textContent = m;
+        if (m === pending) opt.selected = true;
+        ollamaModelSelect.appendChild(opt);
+      }
+    } else if (j.ok) {
+      status.textContent = 'Connected but no models found. Run: ollama pull llama3.1';
+    } else {
+      status.textContent = 'Failed: ' + j.error;
+      status.style.color = '#fca5a5';
+    }
+  } catch (e) {
+    status.textContent = 'Error: ' + e;
+    status.style.color = '#fca5a5';
+  }
+};
+
+document.getElementById('ollamaSaveBtn').onclick = async () => {
+  const url = ollamaUrlInput.value.trim() || 'http://localhost:11434';
+  const model = ollamaModelSelect.value;
+  const msg = document.getElementById('ollamaMsg');
+  try {
+    const r = await fetch('/api/ollama/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ url, model })
+    });
+    const j = await r.json();
+    msg.textContent = j.ok ? `Saved: ${url} / ${model}` : 'Error: ' + j.error;
+    msg.className = 'msg ' + (j.ok ? 'ok' : 'err');
+  } catch (e) {
+    msg.textContent = 'Error: ' + e;
+    msg.className = 'msg err';
+  }
+};
 
 // --- Status ---
 async function fetchStatus() {
@@ -187,6 +296,11 @@ async function fetchProvider() {
     const name = j.provider || 'unknown';
     badge.textContent = name;
     badge.className = 'provider-badge' + (name === 'ollama' ? ' ollama' : name === 'anthropic' ? ' anthropic' : '');
+    // Sync dropdown to match active provider
+    if (providerLabels[name]) {
+      providerSelect.value = name;
+      updateProviderUI();
+    }
   } catch {}
 }
 
