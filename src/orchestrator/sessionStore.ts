@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, unlinkSync } from "fs";
 import path from "path";
-import { callLLM } from "../llm/openai.js";
+import { callLLM } from "../llm/router.js";
 
 const SESSIONS_DIR = path.join(process.cwd(), "sessions");
 const MAX_MESSAGES = 40; // summarize when history exceeds this

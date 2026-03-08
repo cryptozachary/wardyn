@@ -11,6 +11,7 @@ import { sendDiscordReply, extractChannelId } from "./channels/discord.js";
 import { attachWebSocket } from "./channels/websocket.js";
 import { loadHeartbeatConfig, startHeartbeat } from "./orchestrator/heartbeat.js";
 import { listSessions, loadSession, cleanExpiredSessions } from "./orchestrator/sessionStore.js";
+import { getProviderName } from "./llm/router.js";
 import { createServer } from "http";
 import dotenv from "dotenv";
 dotenv.config();
@@ -28,6 +29,14 @@ function getKeys(): Record<string, string> {
   if (cachedKeys) return cachedKeys;
   cachedKeys = loadKeys(process.env.KEY_PASSPHRASE ?? "");
   return cachedKeys;
+}
+
+function getProviderKey(): string {
+  const provider = getProviderName();
+  const keys = getKeys();
+  // Ollama doesn't need a key
+  if (provider === "ollama") return "ollama-local";
+  return keys[provider] ?? keys["openai"] ?? "";
 }
 
 function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -81,14 +90,17 @@ app.get("/api/setup/status", requireAuth, (_req, res) => {
 });
 
 app.post("/api/setup/store-key", requireAuth, (req, res) => {
-  const { passphrase, openaiKey } = req.body || {};
-  if (!passphrase || !openaiKey) {
-    return res.status(400).json({ ok: false, error: "passphrase and openaiKey required" });
+  const { passphrase, provider, key, openaiKey } = req.body || {};
+  // Support both new format { provider, key } and legacy { openaiKey }
+  const providerName = provider || "openai";
+  const apiKey = key || openaiKey;
+  if (!passphrase || !apiKey) {
+    return res.status(400).json({ ok: false, error: "passphrase and key required" });
   }
   try {
-    storeKey("openai", openaiKey, passphrase);
+    storeKey(providerName, apiKey, passphrase);
     cachedKeys = null;
-    res.json({ ok: true });
+    res.json({ ok: true, provider: providerName });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: err.message });
   }
@@ -120,7 +132,7 @@ app.post("/api/memory", requireAuth, (req, res) => {
 app.post('/webhook/telegram', rateLimit, requireAuth, async (req, res) => {
   try {
     const msg = normalizeTelegram(req.body);
-    const key = getKeys()['openai'];
+    const key = getProviderKey();
     const result = await runAgentLoop(msg, skills, key, {
       sessionId: `telegram-${msg.userId}`
     });
@@ -136,7 +148,7 @@ app.post('/webhook/telegram', rateLimit, requireAuth, async (req, res) => {
 app.post('/webhook/discord', rateLimit, requireAuth, async (req, res) => {
   try {
     const msg = normalizeDiscord(req.body);
-    const key = getKeys()['openai'];
+    const key = getProviderKey();
     const result = await runAgentLoop(msg, skills, key, {
       sessionId: `discord-${msg.userId}`
     });
@@ -162,18 +174,18 @@ app.get("/api/sessions/:id", requireAuth, (req, res) => {
   res.json(session);
 });
 
-app.get('/health', (_req, res) => res.json({ ok: true }));
+app.get('/health', (_req, res) => res.json({ ok: true, provider: getProviderName() }));
 
 // Create HTTP server shared by Express and WebSocket
 const server = createServer(app);
 
 // Attach WebSocket control plane
-attachWebSocket(server, skills, () => getKeys()["openai"], API_TOKEN);
+attachWebSocket(server, skills, () => getProviderKey(), API_TOKEN);
 
 // Start heartbeat scheduler
 const heartbeatJobs = loadHeartbeatConfig();
 if (heartbeatJobs.length > 0) {
-  startHeartbeat(heartbeatJobs, skills, () => getKeys()["openai"]);
+  startHeartbeat(heartbeatJobs, skills, () => getProviderKey());
 }
 
 // Clean expired sessions every hour
@@ -181,6 +193,7 @@ setInterval(() => cleanExpiredSessions(), 3_600_000).unref();
 
 server.listen(PORT, HOST, () => {
   console.log(`Secure-Claw Gateway listening on http://${HOST}:${PORT}`);
+  console.log(`LLM provider: ${getProviderName()}`);
   console.log(`WebSocket available at ws://${HOST}:${PORT}/ws`);
   if (heartbeatJobs.length > 0) {
     console.log(`Heartbeat: ${heartbeatJobs.length} job(s) scheduled`);

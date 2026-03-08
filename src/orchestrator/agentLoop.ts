@@ -1,7 +1,7 @@
 import { Message, ToolCall, ToolResult, SkillMeta, OnStream } from "../types.js";
 import { readFileSync, appendFileSync, mkdirSync, existsSync } from "fs";
 import path from "path";
-import { callLLM } from "../llm/openai.js";
+import { callLLM } from "../llm/router.js";
 import { assertSafe } from "../security/safetySpine.js";
 import {
   Session, SessionMessage,
