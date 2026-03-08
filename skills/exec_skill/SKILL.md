@@ -1,0 +1,1 @@
+Execute shell commands or code snippets in a sandboxed environment. Supports bash, sh, node, and python interpreters. All commands run inside the sandbox/ directory with a 15-second timeout. Dangerous commands are blocked by SafetySpine.
