@@ -21,6 +21,9 @@
     .status-dot.error { background: #ef4444; }
     .status-text { font-size: 12px; color: #64748b; }
     .session-id { font-size: 11px; color: #475569; font-family: monospace; }
+    .provider-tag { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; background: #1e3a5f; color: #60a5fa; }
+    .provider-tag.ollama { background: #1a3320; color: #4ade80; }
+    .provider-tag.anthropic { background: #2d1f3d; color: #c084fc; }
 
     /* Config bar */
     .config-bar { display: flex; gap: 8px; padding: 8px 16px; background: #111827; border-bottom: 1px solid #1e2d4a; flex-shrink: 0; }
@@ -56,6 +59,7 @@
     </div>
     <button class="new-session-btn" id="newSessionBtn">New Session</button>
     <div class="header-right">
+      <span class="provider-tag" id="providerTag"></span>
       <div class="status-dot" id="statusDot"></div>
       <span class="status-text" id="statusText">disconnected</span>
       <span class="session-id" id="sessionLabel"></span>
@@ -332,7 +336,20 @@ input.addEventListener('keydown', (e) => {
   }
 });
 
+// --- Fetch provider ---
+async function fetchProvider() {
+  try {
+    const r = await fetch('/health');
+    const j = await r.json();
+    const tag = document.getElementById('providerTag');
+    const name = j.provider || '';
+    tag.textContent = name;
+    tag.className = 'provider-tag' + (name === 'ollama' ? ' ollama' : name === 'anthropic' ? ' anthropic' : '');
+  } catch {}
+}
+
 // --- Init ---
+fetchProvider();
 setMode('ws');
 </script>
 </body>

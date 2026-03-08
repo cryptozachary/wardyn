@@ -4,128 +4,281 @@
   <meta charset="utf-8" />
   <title>Secure-Claw Setup</title>
   <style>
-    body { font-family: Arial, sans-serif; max-width: 960px; margin: 24px auto; padding: 0 12px; color: #0c162f; }
-    h1 { margin-bottom: 8px; }
-    section { border: 1px solid #d7dbe7; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
-    label { display: block; margin: 8px 0 4px; font-weight: 600; }
-    input, textarea, button { width: 100%; box-sizing: border-box; }
-    input, textarea { padding: 8px; border-radius: 6px; border: 1px solid #c4ccdd; }
-    button { margin-top: 8px; padding: 10px; border: none; border-radius: 6px; background: #0f62fe; color: #fff; font-weight: 700; cursor: pointer; }
-    button:disabled { background: #9db6ff; cursor: not-allowed; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0c162f; color: #e2e8f0; min-height: 100vh; padding: 24px 16px; }
+    .container { max-width: 720px; margin: 0 auto; }
+    h1 { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
+    .subtitle { font-size: 13px; color: #64748b; margin-bottom: 20px; }
+    .provider-badge { display: inline-block; padding: 3px 10px; border-radius: 12px; background: #1e3a5f; color: #60a5fa; font-size: 12px; font-weight: 600; margin-left: 8px; vertical-align: middle; }
+    .provider-badge.ollama { background: #1a3320; color: #4ade80; }
+    .provider-badge.anthropic { background: #2d1f3d; color: #c084fc; }
+
+    section { background: #141d35; border: 1px solid #1e2d4a; border-radius: 10px; padding: 20px; margin-bottom: 16px; }
+    section h2 { font-size: 15px; font-weight: 600; color: #94a3b8; margin-bottom: 12px; }
+
+    label { display: block; margin: 10px 0 4px; font-size: 13px; font-weight: 600; color: #94a3b8; }
+    input, textarea, select { width: 100%; padding: 9px 12px; border-radius: 6px; border: 1px solid #1e2d4a; background: #1e293b; color: #e2e8f0; font-size: 14px; font-family: inherit; }
+    input::placeholder, textarea::placeholder { color: #475569; }
+    input:focus, textarea:focus, select:focus { outline: none; border-color: #0f62fe; }
+    select { cursor: pointer; appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2364748b' d='M6 8L1 3h10z'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; padding-right: 32px; }
+
+    button { width: 100%; margin-top: 10px; padding: 10px; border: none; border-radius: 6px; background: #0f62fe; color: #fff; font-weight: 700; font-size: 14px; cursor: pointer; transition: background 0.15s; }
+    button:hover:not(:disabled) { background: #2563eb; }
+    button:disabled { background: #1e3a5f; color: #475569; cursor: not-allowed; }
+    .btn-secondary { background: #1e293b; color: #94a3b8; border: 1px solid #1e2d4a; }
+    .btn-secondary:hover:not(:disabled) { background: #2d3a52; color: #e2e8f0; }
+
     .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-    .status { font-weight: 600; }
-    pre { background: #f5f7fb; padding: 8px; border-radius: 6px; overflow: auto; }
+    .msg { font-size: 13px; margin-top: 8px; min-height: 18px; }
+    .msg.ok { color: #4ade80; }
+    .msg.err { color: #fca5a5; }
+
+    .status-bar { display: flex; align-items: center; gap: 8px; padding: 10px 16px; background: #111827; border: 1px solid #1e2d4a; border-radius: 8px; margin-bottom: 16px; font-size: 13px; }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .status-dot.ok { background: #22c55e; }
+    .status-dot.warn { background: #f59e0b; }
+    .status-dot.off { background: #475569; }
+
+    .ollama-note { background: #1a332040; border: 1px solid #1a3320; border-radius: 6px; padding: 10px 14px; font-size: 13px; color: #86efac; margin-top: 8px; display: none; }
+
+    pre { background: #1e293b; padding: 10px; border-radius: 6px; overflow: auto; font-size: 13px; color: #94a3b8; min-height: 36px; }
+
+    .nav-link { display: inline-block; margin-top: 12px; color: #60a5fa; font-size: 13px; text-decoration: none; }
+    .nav-link:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
-  <h1>Secure-Claw Setup</h1>
-  <p class="status" id="status">Loading status...</p>
+  <div class="container">
+    <h1>Secure-Claw Setup</h1>
+    <p class="subtitle">Configure your AI agent gateway</p>
 
-  <section>
-    <h2>API Token (optional)</h2>
-    <label>API Token (sent as x-api-token)</label>
-    <input id="apiToken" type="password" placeholder="enter token if server requires it" />
-  </section>
-
-  <section>
-    <h2>Store API Key (encrypted)</h2>
-    <label>Passphrase (used to encrypt vault)</label>
-    <input id="passphrase" type="password" placeholder="enter passphrase" />
-    <label>OpenAI API Key</label>
-    <input id="openaiKey" type="password" placeholder="sk-..." />
-    <button id="saveKey">Encrypt & Save</button>
-    <p id="keyMsg"></p>
-  </section>
-
-  <section>
-    <h2>Memory & Soul</h2>
-    <div class="row">
-      <div>
-        <label>MEMORY.md</label>
-        <textarea id="memory" rows="12"></textarea>
-      </div>
-      <div>
-        <label>SOUL.md</label>
-        <textarea id="soul" rows="12"></textarea>
-      </div>
+    <div class="status-bar">
+      <div class="status-dot off" id="statusDot"></div>
+      <span id="statusVault">Checking vault...</span>
+      <span style="margin-left:auto; color:#64748b;">Provider:</span>
+      <span id="activeProvider" class="provider-badge">--</span>
     </div>
-    <button id="saveMemory">Save Memory Files</button>
-    <p id="memMsg"></p>
-  </section>
 
-  <section>
-    <h2>Health Check</h2>
-    <button id="healthBtn">Ping /health</button>
-    <pre id="healthOut"></pre>
-  </section>
+    <section>
+      <h2>Gateway Token</h2>
+      <label>API Token (x-api-token header)</label>
+      <input id="apiToken" type="password" placeholder="leave blank if not configured on server" />
+    </section>
+
+    <section>
+      <h2>LLM Provider Key</h2>
+      <label>Provider</label>
+      <select id="providerSelect">
+        <option value="openai">OpenAI</option>
+        <option value="anthropic">Anthropic (Claude)</option>
+        <option value="ollama">Ollama (local)</option>
+      </select>
+
+      <div id="keyFields">
+        <label>Vault Passphrase</label>
+        <input id="passphrase" type="password" placeholder="encrypts the key at rest" />
+        <label id="keyLabel">OpenAI API Key</label>
+        <input id="providerKey" type="password" placeholder="sk-..." />
+      </div>
+
+      <div class="ollama-note" id="ollamaNote">
+        Ollama runs locally and does not require an API key. Make sure the Ollama server is running at the configured URL (default: http://localhost:11434).
+      </div>
+
+      <button id="saveKey">Encrypt & Save Key</button>
+      <p class="msg" id="keyMsg"></p>
+    </section>
+
+    <section>
+      <h2>Memory & Soul</h2>
+      <div class="row">
+        <div>
+          <label>MEMORY.md</label>
+          <textarea id="memory" rows="12"></textarea>
+        </div>
+        <div>
+          <label>SOUL.md</label>
+          <textarea id="soul" rows="12"></textarea>
+        </div>
+      </div>
+      <button id="saveMemory">Save Memory Files</button>
+      <p class="msg" id="memMsg"></p>
+    </section>
+
+    <section>
+      <h2>Health Check</h2>
+      <button id="healthBtn" class="btn-secondary">Ping /health</button>
+      <pre id="healthOut"></pre>
+    </section>
+
+    <a class="nav-link" href="/chat">Open Chat &rarr;</a>
+  </div>
 
 <script>
+const providerLabels = {
+  openai: 'OpenAI API Key',
+  anthropic: 'Anthropic API Key',
+  ollama: 'Ollama (no key needed)'
+};
+const providerPlaceholders = {
+  openai: 'sk-...',
+  anthropic: 'sk-ant-...',
+  ollama: ''
+};
+
 function authHeaders() {
   const t = document.getElementById('apiToken').value.trim();
   return t ? { 'x-api-token': t } : {};
 }
 
+// --- Persist token ---
 function loadToken() {
-  const saved = localStorage.getItem('secureclaw_api_token') || '';
-  document.getElementById('apiToken').value = saved;
+  document.getElementById('apiToken').value = localStorage.getItem('secureclaw_api_token') || '';
 }
-
-function saveToken() {
-  const t = document.getElementById('apiToken').value.trim();
-  localStorage.setItem('secureclaw_api_token', t);
-}
-
-async function fetchStatus(){
-  try{ const r = await fetch('/api/setup/status', { headers: authHeaders() }); const j = await r.json();
-    document.getElementById('status').textContent = j.hasVault ? 'Vault found (providers.enc present).' : 'Vault not created yet.';
-  }catch(e){ document.getElementById('status').textContent = 'Status error: '+e; }
-}
-
-async function loadMemory(){
-  try{ const r = await fetch('/api/memory', { headers: authHeaders() }); const j = await r.json();
-    if(j.memory!==undefined) document.getElementById('memory').value = j.memory;
-    if(j.soul!==undefined) document.getElementById('soul').value = j.soul;
-  }catch(e){ document.getElementById('memMsg').textContent = 'Load error: '+e; }
-}
-
 document.getElementById('apiToken').addEventListener('input', () => {
-  saveToken();
+  localStorage.setItem('secureclaw_api_token', document.getElementById('apiToken').value.trim());
 });
 
-document.getElementById('saveKey').onclick = async () => {
-  const pass = document.getElementById('passphrase').value.trim();
-  const key = document.getElementById('openaiKey').value.trim();
-  if(!pass || !key){ document.getElementById('keyMsg').textContent = 'Passphrase and key required.'; return; }
-  document.getElementById('saveKey').disabled = true;
-  try{
-    const r = await fetch('/api/setup/store-key', { method:'POST', headers:{'Content-Type':'application/json', ...authHeaders()}, body: JSON.stringify({ passphrase: pass, openaiKey: key }) });
+// --- Provider selector ---
+const providerSelect = document.getElementById('providerSelect');
+const keyFields = document.getElementById('keyFields');
+const ollamaNote = document.getElementById('ollamaNote');
+const keyLabel = document.getElementById('keyLabel');
+const providerKeyInput = document.getElementById('providerKey');
+const saveKeyBtn = document.getElementById('saveKey');
+
+providerSelect.addEventListener('change', updateProviderUI);
+
+function updateProviderUI() {
+  const p = providerSelect.value;
+  const isOllama = p === 'ollama';
+  keyFields.style.display = isOllama ? 'none' : 'block';
+  ollamaNote.style.display = isOllama ? 'block' : 'none';
+  saveKeyBtn.textContent = isOllama ? 'No Key Needed' : 'Encrypt & Save Key';
+  saveKeyBtn.disabled = isOllama;
+  keyLabel.textContent = providerLabels[p] || 'API Key';
+  providerKeyInput.placeholder = providerPlaceholders[p] || '';
+}
+
+// --- Status ---
+async function fetchStatus() {
+  try {
+    const r = await fetch('/api/setup/status', { headers: authHeaders() });
     const j = await r.json();
-    document.getElementById('keyMsg').textContent = j.ok ? 'Saved encrypted vault.' : ('Error: '+j.error);
-    fetchStatus();
-  }catch(e){ document.getElementById('keyMsg').textContent = 'Error: '+e; }
-  document.getElementById('saveKey').disabled = false;
+    const dot = document.getElementById('statusDot');
+    const text = document.getElementById('statusVault');
+    if (j.hasVault) {
+      dot.className = 'status-dot ok';
+      text.textContent = 'Vault found';
+    } else {
+      dot.className = 'status-dot warn';
+      text.textContent = 'No vault yet';
+    }
+  } catch (e) {
+    document.getElementById('statusVault').textContent = 'Error: ' + e;
+  }
+}
+
+async function fetchProvider() {
+  try {
+    const r = await fetch('/health');
+    const j = await r.json();
+    const badge = document.getElementById('activeProvider');
+    const name = j.provider || 'unknown';
+    badge.textContent = name;
+    badge.className = 'provider-badge' + (name === 'ollama' ? ' ollama' : name === 'anthropic' ? ' anthropic' : '');
+  } catch {}
+}
+
+// --- Memory ---
+async function loadMemory() {
+  try {
+    const r = await fetch('/api/memory', { headers: authHeaders() });
+    const j = await r.json();
+    if (j.memory !== undefined) document.getElementById('memory').value = j.memory;
+    if (j.soul !== undefined) document.getElementById('soul').value = j.soul;
+  } catch (e) {
+    document.getElementById('memMsg').textContent = 'Load error: ' + e;
+    document.getElementById('memMsg').className = 'msg err';
+  }
+}
+
+// --- Save key ---
+saveKeyBtn.onclick = async () => {
+  const provider = providerSelect.value;
+  if (provider === 'ollama') return;
+  const passphrase = document.getElementById('passphrase').value.trim();
+  const key = providerKeyInput.value.trim();
+  const keyMsg = document.getElementById('keyMsg');
+  if (!passphrase || !key) {
+    keyMsg.textContent = 'Passphrase and key are required.';
+    keyMsg.className = 'msg err';
+    return;
+  }
+  saveKeyBtn.disabled = true;
+  try {
+    const r = await fetch('/api/setup/store-key', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ passphrase, provider, key })
+    });
+    const j = await r.json();
+    if (j.ok) {
+      keyMsg.textContent = `Saved ${j.provider} key to encrypted vault.`;
+      keyMsg.className = 'msg ok';
+      fetchStatus();
+    } else {
+      keyMsg.textContent = 'Error: ' + j.error;
+      keyMsg.className = 'msg err';
+    }
+  } catch (e) {
+    keyMsg.textContent = 'Error: ' + e;
+    keyMsg.className = 'msg err';
+  }
+  saveKeyBtn.disabled = false;
 };
 
+// --- Save memory ---
 document.getElementById('saveMemory').onclick = async () => {
   const memory = document.getElementById('memory').value;
   const soul = document.getElementById('soul').value;
-  document.getElementById('saveMemory').disabled = true;
-  try{
-    const r = await fetch('/api/memory', { method:'POST', headers:{'Content-Type':'application/json', ...authHeaders()}, body: JSON.stringify({ memory, soul }) });
+  const btn = document.getElementById('saveMemory');
+  const memMsg = document.getElementById('memMsg');
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/memory', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ memory, soul })
+    });
     const j = await r.json();
-    document.getElementById('memMsg').textContent = j.ok ? 'Saved.' : ('Error: '+j.error);
-  }catch(e){ document.getElementById('memMsg').textContent = 'Error: '+e; }
-  document.getElementById('saveMemory').disabled = false;
+    memMsg.textContent = j.ok ? 'Saved.' : ('Error: ' + j.error);
+    memMsg.className = 'msg ' + (j.ok ? 'ok' : 'err');
+  } catch (e) {
+    memMsg.textContent = 'Error: ' + e;
+    memMsg.className = 'msg err';
+  }
+  btn.disabled = false;
 };
 
+// --- Health ---
 document.getElementById('healthBtn').onclick = async () => {
-  document.getElementById('healthOut').textContent = 'Checking...';
-  try{ const r = await fetch('/health'); const t = await r.text(); document.getElementById('healthOut').textContent = t; }
-  catch(e){ document.getElementById('healthOut').textContent = 'Error: '+e; }
+  const out = document.getElementById('healthOut');
+  out.textContent = 'Checking...';
+  try {
+    const r = await fetch('/health');
+    const j = await r.json();
+    out.textContent = JSON.stringify(j, null, 2);
+  } catch (e) {
+    out.textContent = 'Error: ' + e;
+  }
 };
 
+// --- Init ---
 loadToken();
+updateProviderUI();
 fetchStatus();
+fetchProvider();
 loadMemory();
 </script>
 </body>
