@@ -3,16 +3,26 @@ import path from "path";
 import { randomUUID } from "crypto";
 import { Message, SkillMeta } from "../types.js";
 import { runAgentLoop } from "./agentLoop.js";
+import { callLLM } from "../llm/router.js";
+import { scanContext, formatSnapshot } from "./contextScanner.js";
 
 export interface HeartbeatJob {
   name: string;
-  cron: string; // simplified: "every <N>m" or "every <N>h"
-  prompt: string;
+  cron: string; // simplified: "every <N>m" or "every <N>h" or "every <N>s"
+  prompt: string; // for fixed mode: the prompt to send; for smart mode: the goal/role description
   enabled?: boolean;
+  mode?: "fixed" | "smart"; // default: "fixed"
+  scanWindowMs?: number; // how far back to look for smart mode (default: 2 hours)
 }
 
 interface ParsedSchedule {
   intervalMs: number;
+}
+
+interface TriageResult {
+  act: boolean;
+  reason: string;
+  prompt: string | null;
 }
 
 function parseCron(cron: string): ParsedSchedule {
@@ -37,6 +47,70 @@ export function loadHeartbeatConfig(): HeartbeatJob[] {
   }
 }
 
+const TRIAGE_SYSTEM_PROMPT = `You are a proactive AI agent's heartbeat triage system. Your job is to look at a snapshot of recent activity and decide whether the agent should take action.
+
+You will receive:
+1. A context snapshot showing recent sessions, errors, tool usage, and logs
+2. The agent's goal/role description
+
+Respond with ONLY valid JSON (no markdown, no code fences):
+{
+  "act": true or false,
+  "reason": "brief explanation of why you decided to act or not",
+  "prompt": "if act is true, the specific prompt the agent should execute. if false, null"
+}
+
+Guidelines for deciding to act:
+- ACT if there are unresolved errors that could be investigated or fixed
+- ACT if a user asked a question that wasn't fully answered
+- ACT if there's a pattern of repeated failures worth addressing
+- ACT if the agent's goal requires periodic proactive work (monitoring, summarizing, etc.)
+- DO NOT ACT if everything looks normal and there's nothing meaningful to do
+- DO NOT ACT if the only activity is the heartbeat's own previous runs
+- Prefer doing nothing over generating noise — only act when there's genuine value`;
+
+/**
+ * Run the triage phase: scan context and ask the LLM if action is needed.
+ */
+async function triageSmartJob(job: HeartbeatJob, apiKey: string): Promise<TriageResult> {
+  const windowMs = job.scanWindowMs ?? 2 * 3_600_000;
+  const snapshot = scanContext(windowMs);
+  const contextStr = formatSnapshot(snapshot);
+
+  const messages = [
+    { role: "system" as const, content: TRIAGE_SYSTEM_PROMPT },
+    {
+      role: "user" as const,
+      content: `## Agent Goal\n${job.prompt}\n\n## Context Snapshot\n${contextStr}`
+    }
+  ];
+
+  const result = await callLLM({ messages }, apiKey);
+
+  if (!result.text) {
+    return { act: false, reason: "Triage returned no response", prompt: null };
+  }
+
+  try {
+    // Strip markdown code fences if present
+    const cleaned = result.text.replace(/^```(?:json)?\s*/m, "").replace(/\s*```$/m, "").trim();
+    const parsed = JSON.parse(cleaned);
+    return {
+      act: !!parsed.act,
+      reason: parsed.reason || "No reason given",
+      prompt: parsed.prompt || null
+    };
+  } catch {
+    // If the LLM didn't return valid JSON, treat the whole response as a prompt
+    console.warn(`Heartbeat "${job.name}": triage returned non-JSON, treating as action prompt`);
+    return {
+      act: true,
+      reason: "Triage returned free-text response",
+      prompt: result.text
+    };
+  }
+}
+
 export function startHeartbeat(
   jobs: HeartbeatJob[],
   skills: SkillMeta[],
@@ -54,21 +128,16 @@ export function startHeartbeat(
       continue;
     }
 
-    console.log(`Heartbeat: scheduling "${job.name}" every ${schedule.intervalMs / 1000}s`);
+    const mode = job.mode || "fixed";
+    console.log(`Heartbeat: scheduling "${job.name}" (${mode}) every ${schedule.intervalMs / 1000}s`);
 
     const timer = setInterval(async () => {
-      const msg: Message = {
-        id: `hb-${randomUUID()}`,
-        channel: "heartbeat",
-        userId: "system",
-        text: job.prompt,
-        ts: Date.now()
-      };
-
       try {
-        const result = await runAgentLoop(msg, skills, getApiKey());
-        onResult?.(job, result);
-        console.log(`Heartbeat "${job.name}" completed: ${result.final?.slice(0, 100) ?? "(no output)"}`);
+        if (mode === "smart") {
+          await executeSmartJob(job, skills, getApiKey, onResult);
+        } else {
+          await executeFixedJob(job, skills, getApiKey, onResult);
+        }
       } catch (err: any) {
         console.error(`Heartbeat "${job.name}" failed: ${err.message}`);
       }
@@ -78,9 +147,59 @@ export function startHeartbeat(
     timers.push(timer);
   }
 
-  // Return a cleanup function
   return () => {
     for (const t of timers) clearInterval(t);
     timers.length = 0;
   };
+}
+
+async function executeFixedJob(
+  job: HeartbeatJob,
+  skills: SkillMeta[],
+  getApiKey: () => string,
+  onResult?: (job: HeartbeatJob, result: any) => void
+) {
+  const msg: Message = {
+    id: `hb-${randomUUID()}`,
+    channel: "heartbeat",
+    userId: "system",
+    text: job.prompt,
+    ts: Date.now()
+  };
+
+  const result = await runAgentLoop(msg, skills, getApiKey());
+  onResult?.(job, result);
+  console.log(`Heartbeat "${job.name}" completed: ${result.final?.slice(0, 100) ?? "(no output)"}`);
+}
+
+async function executeSmartJob(
+  job: HeartbeatJob,
+  skills: SkillMeta[],
+  getApiKey: () => string,
+  onResult?: (job: HeartbeatJob, result: any) => void
+) {
+  // Phase 1: Triage
+  console.log(`Heartbeat "${job.name}": scanning context...`);
+  const triage = await triageSmartJob(job, getApiKey());
+  console.log(`Heartbeat "${job.name}" triage: act=${triage.act}, reason="${triage.reason}"`);
+
+  if (!triage.act || !triage.prompt) {
+    onResult?.(job, { final: null, skipped: true, reason: triage.reason });
+    return;
+  }
+
+  // Phase 2: Execute the triage-generated prompt
+  const msg: Message = {
+    id: `hb-${randomUUID()}`,
+    channel: "heartbeat",
+    userId: "system",
+    text: triage.prompt,
+    ts: Date.now()
+  };
+
+  const result = await runAgentLoop(msg, skills, getApiKey(), {
+    sessionId: `heartbeat-${job.name}`
+  });
+  onResult?.(job, { ...result, triageReason: triage.reason });
+  console.log(`Heartbeat "${job.name}" acted: ${result.final?.slice(0, 100) ?? "(no output)"}`);
 }
