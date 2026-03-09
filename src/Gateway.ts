@@ -12,6 +12,8 @@ import { attachWebSocket } from "./channels/websocket.js";
 import { loadHeartbeatConfig, startHeartbeat } from "./orchestrator/heartbeat.js";
 import { listSessions, loadSession, cleanExpiredSessions } from "./orchestrator/sessionStore.js";
 import { getProviderName, setProviderName } from "./llm/router.js";
+import { buildSkill } from "./builder/builderAgent.js";
+import { deleteSkill, isProtected } from "./builder/skillWriter.js";
 import { createServer } from "http";
 import dotenv from "dotenv";
 dotenv.config();
@@ -19,6 +21,12 @@ dotenv.config();
 const app = express();
 app.use(bodyParser.json({ limit: "1mb" }));
 const skills = loadSkills();
+
+function reloadSkills() {
+  const fresh = loadSkills();
+  skills.length = 0;
+  skills.push(...fresh);
+}
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = "127.0.0.1";
 const API_TOKEN = process.env.API_TOKEN;
@@ -186,6 +194,53 @@ app.post("/api/memory", requireAuth, (req, res) => {
     res.status(500).json({ ok: false, error: err.message });
   }
 });
+// --- Skill Builder endpoints ---
+app.get("/api/skills", requireAuth, (_req, res) => {
+  res.json({
+    skills: skills.map(s => ({
+      name: s.name,
+      description: s.description,
+      hasExecute: !!s.execute,
+    })),
+  });
+});
+
+app.post("/api/skills/build", rateLimit, requireAuth, async (req, res) => {
+  const { prompt, language, overwrite } = req.body || {};
+  if (!prompt || typeof prompt !== "string") {
+    return res.status(400).json({ ok: false, error: "prompt is required" });
+  }
+  try {
+    const apiKey = getProviderKey();
+    const result = await buildSkill({ prompt, language }, apiKey, overwrite === true);
+
+    if (!result.success && result.validationOutput.includes("already exists")) {
+      return res.json({ ok: false, error: "skill_exists", name: result.name, message: result.validationOutput });
+    }
+
+    if (result.success) {
+      reloadSkills();
+    }
+    res.json({ ok: result.success, skill: result });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.delete("/api/skills/:name", requireAuth, (req, res) => {
+  const { name } = req.params;
+  if (isProtected(name)) {
+    return res.status(403).json({ ok: false, error: `Cannot delete protected skill: ${name}` });
+  }
+  try {
+    deleteSkill(name);
+    reloadSkills();
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
+});
+
 app.post('/webhook/telegram', rateLimit, requireAuth, async (req, res) => {
   try {
     const msg = normalizeTelegram(req.body);

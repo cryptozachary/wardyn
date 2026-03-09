@@ -8,7 +8,7 @@
   },
   {
     "name": "proactive-monitor",
-    "cron": "every 1m",
+    "cron": "every 10m",
     "prompt": "You are a proactive operations monitor. Look for: unresolved user questions, recurring tool errors, sessions where the agent struggled, or anything that needs attention. Summarize findings or take corrective action using available tools.",
     "enabled": true,
     "mode": "smart",
