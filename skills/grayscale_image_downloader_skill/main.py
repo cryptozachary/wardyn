@@ -1,4 +1,6 @@
-import sys, json, requests
+import sys
+import json
+import requests
 from PIL import Image
 from io import BytesIO
 
@@ -8,12 +10,11 @@ def main():
     try:
         response = requests.get(url)
         response.raise_for_status()
-        image = Image.open(BytesIO(response.content))
-        grayscale_image = image.convert('L')
-        output = BytesIO()
-        grayscale_image.save(output, format='JPEG')
-        output.seek(0)
-        print('Grayscale image downloaded successfully.')
+        img = Image.open(BytesIO(response.content))
+        grayscale_img = img.convert('L')
+        output_path = 'grayscale_image.png'
+        grayscale_img.save(output_path)
+        print(f'Image saved as {output_path}')
     except Exception as e:
         print(str(e), file=sys.stderr)
         sys.exit(1)

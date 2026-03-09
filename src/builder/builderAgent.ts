@@ -112,10 +112,13 @@ import { fileURLToPath } from "url";
 export const parameters = ${params};
 
 export async function execute(args: any): Promise<string> {
-  const dir = path.dirname(fileURLToPath(import.meta.url));
+  // Resolve skill source dir (main.py lives in skills/, not dist/skills/)
+  const skillName = path.basename(path.dirname(fileURLToPath(import.meta.url)));
+  const dir = path.join(process.cwd(), "skills", skillName);
   const script = path.join(dir, "main.py");
+  const pythonCmd = process.platform === "win32" ? "python" : "python3";
   return new Promise((resolve, reject) => {
-    const proc = spawn("python3", [script], {
+    const proc = spawn(pythonCmd, [script], {
       cwd: dir, timeout: 30000,
       stdio: ["pipe", "pipe", "pipe"]
     });
@@ -139,7 +142,8 @@ import { fileURLToPath } from "url";
 export const parameters = ${params};
 
 export async function execute(args: any): Promise<string> {
-  const dir = path.dirname(fileURLToPath(import.meta.url));
+  const skillName = path.basename(path.dirname(fileURLToPath(import.meta.url)));
+  const dir = path.join(process.cwd(), "skills", skillName);
   const script = path.join(dir, "main.go");
   return new Promise((resolve, reject) => {
     const proc = spawn("go", ["run", script], {
@@ -167,7 +171,8 @@ import { fileURLToPath } from "url";
 export const parameters = ${params};
 
 export async function execute(args: any): Promise<string> {
-  const dir = path.dirname(fileURLToPath(import.meta.url));
+  const skillName = path.basename(path.dirname(fileURLToPath(import.meta.url)));
+  const dir = path.join(process.cwd(), "skills", skillName);
   const binary = path.join(dir, process.platform === "win32" ? "skill.exe" : "skill");
   const source = path.join(dir, "main.cpp");
 

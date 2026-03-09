@@ -1,7 +1,7 @@
 [
   {
     "name": "BTC Price Check",
-    "cron": "every 1m",
+    "cron": "every 180m",
     "prompt": "Give brief update on bitcoin price and price action.",
     "enabled": true,
     "mode": "fixed"

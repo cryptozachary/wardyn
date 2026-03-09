@@ -7,7 +7,7 @@ export const parameters = {
   "properties": {
     "Test URL": {
       "type": "string",
-      "description": "The URL of the image to download and process."
+      "description": "URL of the image to download"
     }
   },
   "required": [
@@ -16,10 +16,13 @@ export const parameters = {
 };
 
 export async function execute(args: any): Promise<string> {
-  const dir = path.dirname(fileURLToPath(import.meta.url));
+  // Resolve skill source dir (main.py lives in skills/, not dist/skills/)
+  const skillName = path.basename(path.dirname(fileURLToPath(import.meta.url)));
+  const dir = path.join(process.cwd(), "skills", skillName);
   const script = path.join(dir, "main.py");
+  const pythonCmd = process.platform === "win32" ? "python" : "python3";
   return new Promise((resolve, reject) => {
-    const proc = spawn("python3", [script], {
+    const proc = spawn(pythonCmd, [script], {
       cwd: dir, timeout: 30000,
       stdio: ["pipe", "pipe", "pipe"]
     });

@@ -1,1 +1,0 @@
-This skill downloads an image from a provided URL and converts it to grayscale using the Python Imaging Library (PIL).
