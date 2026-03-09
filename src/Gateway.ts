@@ -84,6 +84,9 @@ setInterval(() => {
 // Serve static UI
 app.use("/ui", express.static(path.join(process.cwd(), "public")));
 app.get("/chat", (_req, res) => res.sendFile(path.join(process.cwd(), "public", "chat.html")));
+
+// Serve skill output files (images, downloads, etc.)
+app.use("/output", express.static(path.join(process.cwd(), "output")));
 function normalizeTelegram(body: any): Message {
   return { id: String(body.update_id ?? Date.now()), channel: "telegram", userId: String(body.message?.from?.id ?? "unknown"), text: body.message?.text ?? "", ts: Date.now() };
 }
