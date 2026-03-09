@@ -106,6 +106,30 @@
     </section>
 
     <section>
+      <h2>Channels</h2>
+      <p style="color:#64748b; font-size:12px; margin-bottom:12px;">Configure bot tokens for messaging integrations. After saving, set the webhook URLs in each platform's bot settings.</p>
+
+      <label>Telegram Bot Token</label>
+      <input id="telegramToken" type="password" placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11" />
+
+      <label>Discord Bot Token</label>
+      <input id="discordToken" type="password" placeholder="MTIz..." />
+
+      <label>Slack Bot Token</label>
+      <input id="slackBotToken" type="password" placeholder="xoxb-..." />
+      <label>Slack Signing Secret</label>
+      <input id="slackSigningSecret" type="password" placeholder="abc123..." />
+
+      <button id="saveChannels">Save Channel Tokens</button>
+      <p class="msg" id="channelMsg"></p>
+
+      <div id="webhookUrls" style="margin-top:12px;">
+        <label style="color:#60a5fa; font-size:12px;">Webhook URLs (configure in your bot settings)</label>
+        <pre id="webhookUrlList" style="font-size:12px; color:#86efac;"></pre>
+      </div>
+    </section>
+
+    <section>
       <h2>Memory & Soul</h2>
       <div class="row">
         <div>
@@ -389,12 +413,70 @@ document.getElementById('healthBtn').onclick = async () => {
   }
 };
 
+// --- Channels ---
+async function loadChannelConfig() {
+  try {
+    const r = await fetch('/api/channels/config', { headers: authHeaders() });
+    const j = await r.json();
+    if (j.ok && j.channels) {
+      document.getElementById('telegramToken').placeholder = j.channels.telegram?.botToken || '123456:ABC-DEF...';
+      document.getElementById('discordToken').placeholder = j.channels.discord?.botToken || 'MTIz...';
+      document.getElementById('slackBotToken').placeholder = j.channels.slack?.botToken || 'xoxb-...';
+      document.getElementById('slackSigningSecret').placeholder = j.channels.slack?.signingSecret || 'abc123...';
+    }
+  } catch {}
+  // Show webhook URLs
+  const base = window.location.origin;
+  document.getElementById('webhookUrlList').textContent =
+    `Telegram: ${base}/webhook/telegram\nDiscord:  ${base}/webhook/discord\nSlack:    ${base}/webhook/slack`;
+}
+
+document.getElementById('saveChannels').onclick = async () => {
+  const msg = document.getElementById('channelMsg');
+  const telegram = document.getElementById('telegramToken').value.trim();
+  const discord = document.getElementById('discordToken').value.trim();
+  const slackBot = document.getElementById('slackBotToken').value.trim();
+  const slackSecret = document.getElementById('slackSigningSecret').value.trim();
+
+  if (!telegram && !discord && !slackBot && !slackSecret) {
+    msg.textContent = 'Enter at least one token to save.';
+    msg.className = 'msg err';
+    return;
+  }
+
+  const body = {};
+  if (telegram) body.telegram = { botToken: telegram };
+  if (discord) body.discord = { botToken: discord };
+  if (slackBot || slackSecret) body.slack = { botToken: slackBot, signingSecret: slackSecret };
+
+  try {
+    const r = await fetch('/api/channels/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(body)
+    });
+    const j = await r.json();
+    if (j.ok) {
+      msg.textContent = 'Channel tokens saved.';
+      msg.className = 'msg ok';
+      loadChannelConfig(); // refresh placeholders with masked values
+    } else {
+      msg.textContent = 'Error: ' + j.error;
+      msg.className = 'msg err';
+    }
+  } catch (e) {
+    msg.textContent = 'Error: ' + e;
+    msg.className = 'msg err';
+  }
+};
+
 // --- Init ---
 loadToken();
 updateProviderUI();
 fetchStatus();
 fetchProvider();
 loadMemory();
+loadChannelConfig();
 </script>
 </body>
 </html>

@@ -1,10 +1,15 @@
 import axios from "axios";
+import { loadChannelConfig } from "./channelConfig.js";
 
-const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+function getToken(): string {
+  const cfg = loadChannelConfig();
+  return cfg.telegram?.botToken || process.env.TELEGRAM_BOT_TOKEN || "";
+}
 
 export async function sendTelegramReply(chatId: string | number, text: string) {
-  if (!BOT_TOKEN) throw new Error("TELEGRAM_BOT_TOKEN not set");
-  await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+  const token = getToken();
+  if (!token) throw new Error("Telegram bot token not configured");
+  await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
     chat_id: chatId,
     text,
     parse_mode: "Markdown"

@@ -7,7 +7,9 @@ import { runAgentLoop } from "./orchestrator/agentLoop.js";
 import { Message } from "./types.js";
 import { loadKeys, storeKey } from "./security/keyVault.js";
 import { sendTelegramReply, extractChatId } from "./channels/telegram.js";
-import { sendDiscordReply, extractChannelId } from "./channels/discord.js";
+import { sendDiscordReply, extractChannelId, startDiscordBot, isDiscordBotRunning } from "./channels/discord.js";
+import { sendSlackReply, extractSlackChannelId, isSlackBotMessage, isSlackUrlVerification, isSlackMessageEvent, getSlackSigningSecret, verifySlackSignature } from "./channels/slack.js";
+import { loadChannelConfig, saveChannelConfig, getMaskedConfig, clearChannelConfigCache } from "./channels/channelConfig.js";
 import { attachWebSocket } from "./channels/websocket.js";
 import { loadHeartbeatConfig, startHeartbeat } from "./orchestrator/heartbeat.js";
 import { listSessions, loadSession, cleanExpiredSessions } from "./orchestrator/sessionStore.js";
@@ -19,7 +21,10 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const app = express();
-app.use(bodyParser.json({ limit: "1mb" }));
+app.use(bodyParser.json({
+  limit: "1mb",
+  verify: (req: any, _res, buf) => { req.rawBody = buf.toString(); },
+}));
 const skills = loadSkills();
 
 function reloadSkills() {
@@ -92,6 +97,10 @@ function normalizeTelegram(body: any): Message {
 }
 function normalizeDiscord(body: any): Message {
   return { id: body.id ?? String(Date.now()), channel: "discord", userId: body.author?.id ?? "unknown", text: body.content ?? "", ts: Date.now() };
+}
+function normalizeSlack(body: any): Message {
+  const evt = body.event ?? {};
+  return { id: evt.client_msg_id ?? String(Date.now()), channel: "slack", userId: evt.user ?? "unknown", text: evt.text ?? "", ts: Date.now() };
 }
 
 // --- Setup & configuration endpoints ---
@@ -244,34 +253,118 @@ app.delete("/api/skills/:name", requireAuth, (req, res) => {
   }
 });
 
-app.post('/webhook/telegram', rateLimit, requireAuth, async (req, res) => {
+app.post('/webhook/telegram', rateLimit, async (req, res) => {
   try {
     const msg = normalizeTelegram(req.body);
     const key = getProviderKey();
     const result = await runAgentLoop(msg, skills, key, {
       sessionId: `telegram-${msg.userId}`
     });
-    if (result.final && process.env.TELEGRAM_BOT_TOKEN) {
+    if (result.final) {
       const chatId = extractChatId(req.body);
-      if (chatId) await sendTelegramReply(chatId, result.final);
+      if (chatId) {
+        try { await sendTelegramReply(chatId, result.final); } catch {}
+      }
     }
     res.json(result);
   } catch (err: any) {
     res.status(500).json({ ok: false, error: err.message });
   }
 });
-app.post('/webhook/discord', rateLimit, requireAuth, async (req, res) => {
+app.post('/webhook/discord', rateLimit, async (req, res) => {
   try {
     const msg = normalizeDiscord(req.body);
     const key = getProviderKey();
     const result = await runAgentLoop(msg, skills, key, {
       sessionId: `discord-${msg.userId}`
     });
-    if (result.final && process.env.DISCORD_BOT_TOKEN) {
+    if (result.final) {
       const channelId = extractChannelId(req.body);
-      if (channelId) await sendDiscordReply(channelId, result.final);
+      if (channelId) {
+        try { await sendDiscordReply(channelId, result.final); } catch {}
+      }
     }
     res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// --- Slack webhook ---
+// Dedup set to handle Slack's retry behavior (3-second timeout)
+const processedSlackEvents = new Set<string>();
+setInterval(() => { processedSlackEvents.clear(); }, 300_000).unref();
+
+app.post('/webhook/slack', rateLimit, async (req, res) => {
+  // URL verification challenge (Slack sends this during webhook setup)
+  if (isSlackUrlVerification(req.body)) {
+    return res.json({ challenge: req.body.challenge });
+  }
+
+  // Verify signature if signing secret is configured
+  const signingSecret = getSlackSigningSecret();
+  if (signingSecret) {
+    const timestamp = req.get("x-slack-request-timestamp") ?? "";
+    const signature = req.get("x-slack-signature") ?? "";
+    const rawBody = (req as any).rawBody ?? "";
+    if (!verifySlackSignature(signingSecret, timestamp, rawBody, signature)) {
+      return res.status(401).json({ ok: false, error: "invalid signature" });
+    }
+  }
+
+  // Only process message events
+  if (!isSlackMessageEvent(req.body)) {
+    return res.status(200).json({ ok: true });
+  }
+
+  // Skip bot messages to prevent infinite loops
+  if (isSlackBotMessage(req.body)) {
+    return res.status(200).json({ ok: true });
+  }
+
+  // Deduplicate retries
+  const eventId = req.body.event_id ?? req.body.event?.client_msg_id;
+  if (eventId && processedSlackEvents.has(eventId)) {
+    return res.status(200).json({ ok: true });
+  }
+  if (eventId) processedSlackEvents.add(eventId);
+
+  try {
+    const msg = normalizeSlack(req.body);
+    const key = getProviderKey();
+    const result = await runAgentLoop(msg, skills, key, {
+      sessionId: `slack-${msg.userId}`
+    });
+    if (result.final) {
+      const channelId = extractSlackChannelId(req.body);
+      if (channelId) await sendSlackReply(channelId, result.final);
+    }
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// --- Channel config endpoints ---
+app.get("/api/channels/config", requireAuth, (_req, res) => {
+  res.json({ ok: true, channels: getMaskedConfig() });
+});
+
+app.post("/api/channels/config", requireAuth, (req, res) => {
+  const { telegram, discord, slack } = req.body || {};
+  try {
+    // Load existing config, merge only non-empty values
+    const existing = loadChannelConfig();
+    if (telegram?.botToken) existing.telegram = { botToken: telegram.botToken };
+    if (discord?.botToken) existing.discord = { botToken: discord.botToken };
+    if (slack?.botToken || slack?.signingSecret) {
+      existing.slack = {
+        botToken: slack.botToken || existing.slack?.botToken || "",
+        signingSecret: slack.signingSecret || existing.slack?.signingSecret || "",
+      };
+    }
+    saveChannelConfig(existing);
+    res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: err.message });
   }
@@ -289,7 +382,7 @@ app.get("/api/sessions/:id", requireAuth, (req, res) => {
   res.json(session);
 });
 
-app.get('/health', (_req, res) => res.json({ ok: true, provider: getProviderName() }));
+app.get('/health', (_req, res) => res.json({ ok: true, provider: getProviderName(), discord: isDiscordBotRunning() }));
 
 // Create HTTP server shared by Express and WebSocket
 const server = createServer(app);
@@ -302,6 +395,9 @@ const heartbeatJobs = loadHeartbeatConfig();
 if (heartbeatJobs.length > 0) {
   startHeartbeat(heartbeatJobs, skills, () => getProviderKey());
 }
+
+// Start Discord gateway bot
+startDiscordBot(skills, () => getProviderKey());
 
 // Clean expired sessions every hour
 setInterval(() => cleanExpiredSessions(), 3_600_000).unref();

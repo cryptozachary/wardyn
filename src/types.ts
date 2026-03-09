@@ -1,4 +1,4 @@
-export type Channel = "telegram" | "discord" | "websocket" | "heartbeat";
+export type Channel = "telegram" | "discord" | "websocket" | "heartbeat" | "slack";
 export interface Message { id: string; channel: Channel; userId: string; text: string; ts: number; }
 export interface ToolCall { name: string; args: Record<string, unknown>; }
 export interface ToolResult { name: string; output: string; error?: string; }
