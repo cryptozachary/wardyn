@@ -74,7 +74,7 @@ export function startDiscordBot(
 
       const key = getProviderKey();
       const result = await runAgentLoop(normalized, skills, key, {
-        sessionId: `discord-${msg.author.id}`,
+        sessionId: "default",
       });
 
       if (result.final) {

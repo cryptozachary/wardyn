@@ -52,8 +52,8 @@ export async function runAgentLoop(
   const toolList = tools.map(t => `- ${t.name}: ${t.description}`).join("\n");
   const systemPrompt = `${ctx.soul}\n\n${ctx.memory}\n\nAvailable tools:\n${toolList}`;
 
-  // Load or create session
-  const sid = sessionId ?? `${msg.channel}-${msg.userId}`;
+  // Load or create session — unified across all channels (single-user agent)
+  const sid = sessionId ?? "default";
   const session = getOrCreateSession(sid, msg.userId);
 
   // Compact history if it's getting long

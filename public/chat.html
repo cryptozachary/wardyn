@@ -84,14 +84,11 @@
 let mode = 'ws';
 let ws = null;
 let sending = false;
-let currentSessionId = localStorage.getItem('secureclaw_ws_session') || null;
-let httpSessionId = localStorage.getItem('secureclaw_http_session') || null;
+let currentSessionId = null; // unified "default" session — no longer persisted per-tab
+let httpSessionId = null;
 
 function persistSession() {
-  if (currentSessionId) localStorage.setItem('secureclaw_ws_session', currentSessionId);
-  else localStorage.removeItem('secureclaw_ws_session');
-  if (httpSessionId) localStorage.setItem('secureclaw_http_session', httpSessionId);
-  else localStorage.removeItem('secureclaw_http_session');
+  // Sessions are unified as "default" — no need to persist per-tab
 }
 
 const msgContainer = document.getElementById('messages');

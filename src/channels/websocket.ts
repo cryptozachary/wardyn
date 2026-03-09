@@ -30,9 +30,9 @@ export function attachWebSocket(
       }
     }
 
-    // Resume session from query param or create new one
-    let sessionId = connUrl.searchParams.get("sessionId") || `ws-${randomUUID()}`;
-    const userId = "ws-user";
+    // Use a consistent default session so all channels share history
+    let sessionId = connUrl.searchParams.get("sessionId") || "default";
+    const userId = "default";
 
     ws.on("message", async (raw) => {
       let data: WsIncoming;
@@ -43,9 +43,9 @@ export function attachWebSocket(
         return;
       }
 
-      // Allow client to start a new session
+      // Allow client to start a fresh session (clears shared history)
       if (data.type === "new_session") {
-        sessionId = `ws-${randomUUID()}`;
+        sessionId = data.sessionId || "default";
         sendJson(ws, { type: "session", sessionId });
         return;
       }

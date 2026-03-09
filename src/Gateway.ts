@@ -258,7 +258,7 @@ app.post('/webhook/telegram', rateLimit, async (req, res) => {
     const msg = normalizeTelegram(req.body);
     const key = getProviderKey();
     const result = await runAgentLoop(msg, skills, key, {
-      sessionId: `telegram-${msg.userId}`
+      sessionId: "default"
     });
     if (result.final) {
       const chatId = extractChatId(req.body);
@@ -276,7 +276,7 @@ app.post('/webhook/discord', rateLimit, async (req, res) => {
     const msg = normalizeDiscord(req.body);
     const key = getProviderKey();
     const result = await runAgentLoop(msg, skills, key, {
-      sessionId: `discord-${msg.userId}`
+      sessionId: "default"
     });
     if (result.final) {
       const channelId = extractChannelId(req.body);
@@ -333,7 +333,7 @@ app.post('/webhook/slack', rateLimit, async (req, res) => {
     const msg = normalizeSlack(req.body);
     const key = getProviderKey();
     const result = await runAgentLoop(msg, skills, key, {
-      sessionId: `slack-${msg.userId}`
+      sessionId: "default"
     });
     if (result.final) {
       const channelId = extractSlackChannelId(req.body);
