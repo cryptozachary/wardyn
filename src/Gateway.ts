@@ -206,13 +206,13 @@ app.get("/api/skills", requireAuth, (_req, res) => {
 });
 
 app.post("/api/skills/build", rateLimit, requireAuth, async (req, res) => {
-  const { prompt, language, overwrite } = req.body || {};
+  const { prompt, language, overwrite, testArgs } = req.body || {};
   if (!prompt || typeof prompt !== "string") {
     return res.status(400).json({ ok: false, error: "prompt is required" });
   }
   try {
     const apiKey = getProviderKey();
-    const result = await buildSkill({ prompt, language }, apiKey, overwrite === true);
+    const result = await buildSkill({ prompt, language }, apiKey, overwrite === true, testArgs);
 
     if (!result.success && result.validationOutput.includes("already exists")) {
       return res.json({ ok: false, error: "skill_exists", name: result.name, message: result.validationOutput });

@@ -2,6 +2,7 @@ import { callLLM } from "../llm/router.js";
 import { assertSafe } from "../security/safetySpine.js";
 import { sanitizeName, skillExists, isProtected, writeSkill } from "./skillWriter.js";
 import { validate } from "./validator.js";
+import { smokeTest } from "./smokeTest.js";
 import type { BuilderRequest, BuilderResult } from "./types.js";
 
 const BUILDER_SYSTEM_PROMPT = `You are a skill code generator for the SecureClaw agent framework.
@@ -90,7 +91,8 @@ Respond with ONLY a JSON object. No markdown fences, no explanation, just raw JS
   "description": "One-line description",
   "parameters": { "type": "object", "properties": { ... }, "required": [...] },
   "code": "the complete source code as a single string",
-  "skillMd": "1-3 sentence description for SKILL.md"
+  "skillMd": "1-3 sentence description for SKILL.md",
+  "sampleArgs": { "arg1": "realistic test value", "arg2": 42 }
 }
 
 IMPORTANT:
@@ -99,7 +101,8 @@ IMPORTANT:
 - code must be a single string with \\n for newlines
 - Do NOT include markdown fences in your response
 - For TypeScript: code is the full index.ts content
-- For other languages: code is the main.py/main.go/main.cpp content`;
+- For other languages: code is the main.py/main.go/main.cpp content
+- sampleArgs MUST contain realistic test values that will actually work when the skill runs. For URLs use real public URLs. For file paths use plausible test paths. For numbers use sensible defaults. These args are used to smoke-test the generated skill.`;
 
 const WRAPPER_TEMPLATES: Record<string, (params: string) => string> = {
   python: (params) => `import { spawn } from "child_process";
@@ -240,7 +243,7 @@ export async function generate(request: BuilderRequest, apiKey: string): Promise
   }
 
   // Validate required fields
-  const { name, language, description, parameters, code, skillMd } = parsed;
+  const { name, language, description, parameters, code, skillMd, sampleArgs } = parsed;
   if (!name || !language || !code) {
     throw new Error("Builder response missing required fields (name, language, code)");
   }
@@ -279,18 +282,110 @@ export async function generate(request: BuilderRequest, apiKey: string): Promise
     skillMd: skillMd ?? description ?? "Generated skill",
     validationOutput: "",
     success: false,
+    attempts: 1,
+    sampleArgs: sampleArgs ?? undefined,
   };
 
   return result;
 }
 
+const MAX_RETRIES = 3;
+
+/**
+ * Ask the LLM to fix code based on error output.
+ * Sends the original prompt, the failing code, and the error for correction.
+ */
+async function regenerate(
+  request: BuilderRequest,
+  previousCode: string,
+  language: string,
+  errorOutput: string,
+  errorPhase: "validation" | "smoke_test",
+  apiKey: string
+): Promise<BuilderResult> {
+  const fixPrompt = `The previously generated ${language} skill code failed during ${errorPhase === "validation" ? "compilation/validation" : "runtime smoke testing"}.
+
+## Original Request
+${request.prompt}
+
+## Failing Code
+\`\`\`
+${previousCode}
+\`\`\`
+
+## Error Output
+\`\`\`
+${errorOutput}
+\`\`\`
+
+Fix the code to resolve this error. Return the corrected skill in the same JSON format. Keep the same skill name and language.`;
+
+  const languageHint = language !== "auto"
+    ? `\n\nThe skill MUST be written in ${language}. Do not change the language.`
+    : "";
+
+  const response = await callLLM(
+    {
+      messages: [
+        { role: "system", content: BUILDER_SYSTEM_PROMPT + languageHint },
+        { role: "user", content: fixPrompt },
+      ],
+    },
+    apiKey
+  );
+
+  if (!response.text) {
+    throw new Error("Builder agent returned empty response on retry");
+  }
+
+  let parsed: any;
+  try {
+    parsed = parseResponse(response.text);
+  } catch {
+    throw new Error(`Failed to parse retry response as JSON`);
+  }
+
+  const { name, description, parameters, code, skillMd, sampleArgs } = parsed;
+  if (!code) {
+    throw new Error("Retry response missing code field");
+  }
+
+  const sanitized = sanitizeName(name || "");
+  assertSafe(code);
+
+  let wrapperCode: string | undefined;
+  if (language !== "typescript") {
+    const template = WRAPPER_TEMPLATES[language];
+    if (template) {
+      wrapperCode = template(JSON.stringify(parameters ?? {}, null, 2));
+    }
+  }
+
+  return {
+    name: sanitized,
+    language,
+    description: description ?? "Generated skill",
+    parameters: parameters ?? {},
+    code,
+    wrapperCode,
+    skillMd: skillMd ?? description ?? "Generated skill",
+    validationOutput: "",
+    success: false,
+    attempts: 0,
+    sampleArgs: sampleArgs ?? undefined,
+  };
+}
+
 export async function buildSkill(
   request: BuilderRequest,
   apiKey: string,
-  overwrite = false
+  overwrite = false,
+  userTestArgs?: Record<string, unknown>
 ): Promise<BuilderResult> {
   // Generate the skill code via LLM
-  const result = await generate(request, apiKey);
+  let result = await generate(request, apiKey);
+  result.attempts = 1;
+  result.retryLog = [];
 
   // Check for conflicts
   if (skillExists(result.name) && !overwrite) {
@@ -301,13 +396,78 @@ export async function buildSkill(
     };
   }
 
-  // Write files to disk
-  writeSkill(result);
+  for (let attempt = 1; attempt <= MAX_RETRIES + 1; attempt++) {
+    result.attempts = attempt;
 
-  // Validate the generated code
-  const validation = await validate(result.name, result.language);
-  result.validationOutput = validation.output;
-  result.success = validation.valid;
+    // Write files to disk
+    writeSkill(result);
+
+    // Validate the generated code
+    const validation = await validate(result.name, result.language);
+    result.validationOutput = validation.output;
+    result.success = validation.valid;
+
+    // If validation failed, retry with error context
+    if (!validation.valid) {
+      if (attempt <= MAX_RETRIES) {
+        result.retryLog!.push(`Attempt ${attempt}: validation failed — ${validation.output.slice(0, 200)}`);
+        try {
+          const fixed = await regenerate(
+            request, result.code, result.language,
+            validation.output, "validation", apiKey
+          );
+          // Preserve name and carry forward metadata
+          fixed.name = result.name;
+          fixed.retryLog = result.retryLog;
+          result = fixed;
+          continue;
+        } catch {
+          // If regenerate itself fails, stop retrying
+          break;
+        }
+      }
+      break;
+    }
+
+    // Run smoke test if validation passed — user-provided args take priority
+    try {
+      const effectiveTestArgs = userTestArgs ?? result.sampleArgs;
+      result.smokeTest = await smokeTest(result.name, result.language, result.parameters, effectiveTestArgs);
+    } catch (err: any) {
+      result.smokeTest = { passed: false, output: "", error: err.message, duration: 0 };
+    }
+
+    // If smoke test failed with a network/external-resource error, treat as soft pass
+    // The code itself is likely correct — the test data just couldn't reach the resource
+    if (result.smokeTest && !result.smokeTest.passed && result.smokeTest.softFail) {
+      result.success = true; // deploy the skill anyway
+      break;
+    }
+
+    // If smoke test failed (non-network), retry with error context
+    if (result.smokeTest && !result.smokeTest.passed) {
+      const smokeError = result.smokeTest.error || result.smokeTest.output || "Unknown runtime error";
+      if (attempt <= MAX_RETRIES) {
+        result.retryLog!.push(`Attempt ${attempt}: smoke test failed — ${smokeError.slice(0, 200)}`);
+        try {
+          const fixed = await regenerate(
+            request, result.code, result.language,
+            smokeError, "smoke_test", apiKey
+          );
+          fixed.name = result.name;
+          fixed.retryLog = result.retryLog;
+          result = fixed;
+          continue;
+        } catch {
+          break;
+        }
+      }
+      break;
+    }
+
+    // Both validation and smoke test passed
+    break;
+  }
 
   return result;
 }

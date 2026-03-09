@@ -106,6 +106,9 @@
       <label>Describe the skill you want to build</label>
       <textarea id="skillPrompt" rows="4" placeholder="e.g., A skill that converts CSV data to JSON format, supporting headers and custom delimiters"></textarea>
 
+      <label>Test Arguments <span style="font-weight:400; color:#475569;">(optional JSON — provide real values for URLs, file paths, etc.)</span></label>
+      <textarea id="testArgs" rows="2" placeholder='e.g., { "url": "https://httpbin.org/get", "count": 5 }' style="font-family: 'Consolas', 'Monaco', monospace; font-size: 12px;"></textarea>
+
       <div class="build-row">
         <div>
           <label>Language</label>
@@ -126,6 +129,7 @@
         <div class="progress-step" id="stepAnalyze"><span class="spinner"></span> Analyzing request...</div>
         <div class="progress-step" id="stepGenerate">Generating code...</div>
         <div class="progress-step" id="stepValidate">Validating...</div>
+        <div class="progress-step" id="stepSmoke">Smoke testing...</div>
         <div class="progress-step" id="stepDone">Done</div>
       </div>
 
@@ -146,6 +150,20 @@
         <div style="margin-top:8px;">
           <div class="code-header"><span>Validation Output</span></div>
           <pre class="validation" id="validationOutput"></pre>
+        </div>
+
+        <div id="smokeTestSection" style="display:none; margin-top:8px;">
+          <div class="code-header">
+            <span>Smoke Test</span>
+            <span class="code-lang" id="smokeTestStatus">--</span>
+          </div>
+          <pre class="validation" id="smokeTestOutput"></pre>
+          <div style="font-size:12px; color:#64748b; margin-top:4px;" id="smokeTestDuration"></div>
+        </div>
+
+        <div id="retrySection" style="display:none; margin-top:8px;">
+          <div class="code-header"><span>Retry Log</span></div>
+          <pre class="validation" id="retryLog" style="border-color:#92400e; color:#fbbf24;"></pre>
         </div>
       </div>
     </section>
@@ -224,41 +242,101 @@ async function deleteSkill(name) {
 }
 
 // --- Progress helpers ---
-const steps = ['stepAnalyze', 'stepGenerate', 'stepValidate', 'stepDone'];
+const steps = ['stepAnalyze', 'stepGenerate', 'stepValidate', 'stepSmoke', 'stepDone'];
+const stepLabels = ['Analyzing request...', 'Generating code...', 'Validating...', 'Smoke testing...', 'Done'];
+let stepTimers = [];
+
+function clearStepTimers() {
+  stepTimers.forEach(t => clearTimeout(t));
+  stepTimers = [];
+}
+
 function showProgress() {
+  clearStepTimers();
   document.getElementById('progress').style.display = 'block';
   document.getElementById('codePreview').style.display = 'none';
   document.getElementById('buildMsg').textContent = '';
-  steps.forEach(id => {
+  steps.forEach((id, i) => {
     const el = document.getElementById(id);
     el.className = 'progress-step';
-    el.querySelector('.spinner')?.remove();
+    el.innerHTML = stepLabels[i];
   });
 }
+
 function setStep(index) {
   steps.forEach((id, i) => {
     const el = document.getElementById(id);
     if (i < index) {
       el.className = 'progress-step done';
-      el.innerHTML = '&#10003; ' + el.textContent.replace(/^[✓✗] ?/, '');
+      el.innerHTML = '&#10003; ' + stepLabels[i];
     } else if (i === index) {
       el.className = 'progress-step active';
-      el.innerHTML = '<span class="spinner"></span> ' + el.textContent.replace(/^[✓✗] ?/, '');
+      el.innerHTML = '<span class="spinner"></span> ' + stepLabels[i];
     } else {
       el.className = 'progress-step';
+      el.innerHTML = stepLabels[i];
     }
   });
 }
-function setStepDone(success) {
-  const doneEl = document.getElementById('stepDone');
-  if (success) {
-    steps.forEach((id, i) => {
-      if (i < 3) {
-        const el = document.getElementById(id);
-        el.className = 'progress-step done';
-        el.innerHTML = '&#10003; ' + el.textContent.replace(/^[✓✗] ?|<[^>]+>/g, '');
-      }
-    });
+
+// Finalize progress: mark steps done/skipped/failed based on actual result
+function finalizeProgress(skill) {
+  clearStepTimers();
+
+  const hasValidation = !!skill;
+  const validationPassed = skill?.success || (skill?.smokeTest != null);
+  const hasSmokeTest = !!skill?.smokeTest;
+  const smokePassed = skill?.smokeTest?.passed;
+  const allPassed = skill?.success && (!hasSmokeTest || smokePassed);
+  const attempts = skill?.attempts || 1;
+  const hadRetries = attempts > 1;
+
+  // Steps 0-1 (analyze, generate) always pass if we got a response
+  for (let i = 0; i < 2; i++) {
+    const el = document.getElementById(steps[i]);
+    el.className = 'progress-step done';
+    el.innerHTML = '&#10003; ' + stepLabels[i];
+  }
+
+  // If retries happened, update generate label
+  if (hadRetries) {
+    const genEl = document.getElementById(steps[1]);
+    genEl.innerHTML = `&#10003; Generated (${attempts} attempt${attempts > 1 ? 's' : ''})`;
+  }
+
+  // Step 2: Validate
+  const valEl = document.getElementById(steps[2]);
+  if (validationPassed) {
+    valEl.className = 'progress-step done';
+    valEl.innerHTML = '&#10003; ' + stepLabels[2];
+  } else {
+    valEl.className = 'progress-step fail';
+    valEl.innerHTML = `&#10007; ${stepLabels[2]}${hadRetries ? ' (after ' + attempts + ' attempts)' : ''}`;
+  }
+
+  // Step 3: Smoke test
+  const smokeEl = document.getElementById(steps[3]);
+  if (!validationPassed) {
+    smokeEl.className = 'progress-step';
+    smokeEl.innerHTML = '&#8212; Skipped (validation failed)';
+  } else if (!hasSmokeTest) {
+    smokeEl.className = 'progress-step';
+    smokeEl.innerHTML = '&#8212; Skipped';
+  } else if (smokePassed) {
+    smokeEl.className = 'progress-step done';
+    smokeEl.innerHTML = '&#10003; ' + stepLabels[3];
+  } else if (skill?.smokeTest?.softFail) {
+    smokeEl.className = 'progress-step';
+    smokeEl.style.color = '#fbbf24';
+    smokeEl.innerHTML = '&#9888; Smoke test skipped (network resource unavailable)';
+  } else {
+    smokeEl.className = 'progress-step fail';
+    smokeEl.innerHTML = `&#10007; ${stepLabels[3]}${hadRetries ? ' (after ' + attempts + ' attempts)' : ''}`;
+  }
+
+  // Step 4: Done
+  const doneEl = document.getElementById(steps[4]);
+  if (allPassed) {
     doneEl.className = 'progress-step done';
     doneEl.innerHTML = '&#10003; Complete!';
   } else {
@@ -282,24 +360,39 @@ async function buildSkill(overwrite) {
     return;
   }
 
+  // Parse optional test args
+  let testArgs = undefined;
+  const testArgsRaw = document.getElementById('testArgs').value.trim();
+  if (testArgsRaw) {
+    try {
+      testArgs = JSON.parse(testArgsRaw);
+    } catch (e) {
+      buildMsg.textContent = 'Test Arguments must be valid JSON.';
+      buildMsg.className = 'msg err';
+      return;
+    }
+  }
+
   buildBtn.disabled = true;
   showProgress();
   setStep(0); // Analyzing
 
   try {
     // Simulate step progression (the API call covers all steps)
-    setTimeout(() => setStep(1), 1500); // Generating
-    setTimeout(() => setStep(2), 4000); // Validating
+    stepTimers.push(setTimeout(() => setStep(1), 1500));  // Generating
+    stepTimers.push(setTimeout(() => setStep(2), 4000));  // Validating
+    stepTimers.push(setTimeout(() => setStep(3), 7000));  // Smoke testing
 
     const r = await fetch('/api/skills/build', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ prompt, language, overwrite })
+      body: JSON.stringify({ prompt, language, overwrite, testArgs })
     });
     const j = await r.json();
 
     if (j.error === 'skill_exists') {
-      setStepDone(false);
+      clearStepTimers();
+      finalizeProgress(null);
       if (confirm(`Skill "${j.name}" already exists. Overwrite it?`)) {
         buildBtn.disabled = false;
         return buildSkill(true);
@@ -311,21 +404,23 @@ async function buildSkill(overwrite) {
     }
 
     const skill = j.skill;
+    finalizeProgress(skill);
+
     if (j.ok && skill?.success) {
-      setStepDone(true);
-      buildMsg.textContent = `Skill "${skill.name}" built successfully in ${skill.language}!`;
+      const retryNote = (skill.attempts > 1) ? ` (fixed after ${skill.attempts} attempts)` : '';
+      buildMsg.textContent = `Skill "${skill.name}" built successfully in ${skill.language}!${retryNote}`;
       buildMsg.className = 'msg ok';
       showCodePreview(skill);
       loadSkills();
     } else {
-      setStepDone(false);
       const errDetail = skill?.validationOutput || j.error || 'Unknown error';
       buildMsg.textContent = 'Build failed: ' + errDetail.slice(0, 200);
       buildMsg.className = 'msg err';
       if (skill) showCodePreview(skill);
     }
   } catch (e) {
-    setStepDone(false);
+    clearStepTimers();
+    finalizeProgress(null);
     buildMsg.textContent = 'Error: ' + e;
     buildMsg.className = 'msg err';
   }
@@ -351,6 +446,38 @@ function showCodePreview(skill) {
   const valOut = document.getElementById('validationOutput');
   valOut.textContent = skill.validationOutput || '(no output)';
   valOut.className = 'validation ' + (skill.success ? 'ok' : 'err');
+
+  // Smoke test results
+  const smokeSection = document.getElementById('smokeTestSection');
+  if (skill.smokeTest) {
+    smokeSection.style.display = 'block';
+    const st = skill.smokeTest;
+    const statusEl = document.getElementById('smokeTestStatus');
+    const isWarning = !st.passed && st.softFail;
+    statusEl.textContent = st.passed ? 'PASSED' : (isWarning ? 'WARNING' : 'FAILED');
+    statusEl.style.background = st.passed ? '#166534' : (isWarning ? '#92400e' : '#991b1b');
+    statusEl.style.color = st.passed ? '#4ade80' : (isWarning ? '#fbbf24' : '#fca5a5');
+
+    const outEl = document.getElementById('smokeTestOutput');
+    outEl.textContent = st.passed
+      ? (st.output || '(no output)')
+      : (st.error || st.output || '(no output)');
+    outEl.className = 'validation ' + (st.passed ? 'ok' : 'err');
+
+    document.getElementById('smokeTestDuration').textContent =
+      `Completed in ${st.duration}ms`;
+  } else {
+    smokeSection.style.display = 'none';
+  }
+
+  // Retry log
+  const retrySection = document.getElementById('retrySection');
+  if (skill.retryLog && skill.retryLog.length > 0) {
+    retrySection.style.display = 'block';
+    document.getElementById('retryLog').textContent = skill.retryLog.join('\n');
+  } else {
+    retrySection.style.display = 'none';
+  }
 }
 
 // --- Init ---

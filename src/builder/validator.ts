@@ -1,8 +1,10 @@
 import { spawn } from "child_process";
+import { writeFileSync, unlinkSync } from "fs";
 import path from "path";
 import type { ValidationResult } from "./types.js";
 
 const SKILLS_DIR = path.join(process.cwd(), "skills");
+const SANDBOX_DIR = path.join(process.cwd(), "sandbox");
 const TIMEOUT_MS = 30_000;
 
 export async function validate(skillName: string, language: string): Promise<ValidationResult> {
@@ -32,11 +34,30 @@ function validateTypeScript(skillDir: string): Promise<ValidationResult> {
   ]);
 }
 
+/**
+ * Validate Python by writing a temp script that does ast.parse.
+ * This avoids shell quoting issues with `python3 -c "..."` on Windows.
+ */
 function validatePython(filePath: string): Promise<ValidationResult> {
-  return runCommand("python3", [
-    "-c",
-    `import ast; ast.parse(open(r'${filePath}').read()); print('Syntax OK')`,
-  ]);
+  const tmpScript = path.join(SANDBOX_DIR, `_validate_${Date.now()}.py`);
+  // Use forward slashes in the path to avoid Python string escaping issues
+  const safeFilePath = filePath.replace(/\\/g, "/");
+  writeFileSync(tmpScript, `
+import ast, sys
+try:
+    with open("${safeFilePath}", "r") as f:
+        ast.parse(f.read())
+    print("Syntax OK")
+except SyntaxError as e:
+    print(f"SyntaxError: {e}", file=sys.stderr)
+    sys.exit(1)
+`, "utf8");
+
+  return runCommand(
+    process.platform === "win32" ? "python" : "python3",
+    [tmpScript],
+    tmpScript
+  );
 }
 
 function validateGo(filePath: string): Promise<ValidationResult> {
@@ -48,7 +69,7 @@ function validateCpp(filePath: string): Promise<ValidationResult> {
   return runCommand("g++", ["-fsyntax-only", filePath]);
 }
 
-function runCommand(cmd: string, args: string[]): Promise<ValidationResult> {
+function runCommand(cmd: string, args: string[], cleanupFile?: string): Promise<ValidationResult> {
   return new Promise((resolve) => {
     const proc = spawn(cmd, args, {
       cwd: process.cwd(),
@@ -64,11 +85,17 @@ function runCommand(cmd: string, args: string[]): Promise<ValidationResult> {
     proc.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
 
     proc.on("close", (code) => {
+      if (cleanupFile) {
+        try { unlinkSync(cleanupFile); } catch {}
+      }
       const output = (stdout + "\n" + stderr).trim();
       resolve({ valid: code === 0, output: output || (code === 0 ? "Validation passed" : `Exit code ${code}`) });
     });
 
     proc.on("error", (err) => {
+      if (cleanupFile) {
+        try { unlinkSync(cleanupFile); } catch {}
+      }
       resolve({ valid: false, output: `Command not found or failed: ${err.message}. Is ${cmd} installed?` });
     });
   });
