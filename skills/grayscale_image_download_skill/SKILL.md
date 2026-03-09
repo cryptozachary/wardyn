@@ -1,0 +1,1 @@
+This skill downloads an image from a provided URL and converts it to grayscale, saving it as 'grayscale_image.png'.

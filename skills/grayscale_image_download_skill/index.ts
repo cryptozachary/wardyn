@@ -7,7 +7,7 @@ export const parameters = {
   "properties": {
     "Test URL": {
       "type": "string",
-      "description": "URL of the image to download"
+      "description": "The URL of the image to be downloaded"
     }
   },
   "required": [

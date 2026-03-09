@@ -1,8 +1,10 @@
-import { existsSync, mkdirSync, writeFileSync, rmSync } from "fs";
+import { existsSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "fs";
+import { execSync } from "child_process";
 import path from "path";
 import type { BuilderResult } from "./types.js";
 
 const SKILLS_DIR = path.join(process.cwd(), "skills");
+const DIST_SKILLS_DIR = path.join(process.cwd(), "dist", "skills");
 
 const PROTECTED_SKILLS = new Set([
   "exec_skill",
@@ -52,6 +54,37 @@ export function writeSkill(result: BuilderResult): void {
       writeFileSync(path.join(skillDir, mainFile), result.code, "utf8");
     }
   }
+
+  // Compile to dist/ so the skill loader picks it up at runtime
+  compileSkillToDist(result.name, skillDir);
+}
+
+/**
+ * Compile a single skill's index.ts → dist/skills/<name>/index.js
+ * and copy SKILL.md so the loader finds it.
+ */
+function compileSkillToDist(name: string, skillDir: string): void {
+  const distDir = path.join(DIST_SKILLS_DIR, name);
+  if (!existsSync(distDir)) {
+    mkdirSync(distDir, { recursive: true });
+  }
+
+  try {
+    const indexTs = path.join(skillDir, "index.ts");
+    execSync(
+      `npx tsc --outDir "${distDir}" --module nodenext --moduleResolution nodenext --target ES2022 --esModuleInterop --skipLibCheck --declaration false "${indexTs}"`,
+      { cwd: process.cwd(), timeout: 30_000, stdio: "pipe" }
+    );
+  } catch {
+    // Compilation may fail for non-TS skills during validation phase — that's OK,
+    // the validator will catch it. Just ensure SKILL.md is copied.
+  }
+
+  // Copy SKILL.md to dist
+  const srcMd = path.join(skillDir, "SKILL.md");
+  if (existsSync(srcMd)) {
+    writeFileSync(path.join(distDir, "SKILL.md"), readFileSync(srcMd, "utf8"), "utf8");
+  }
 }
 
 export function deleteSkill(name: string): void {
@@ -63,4 +96,10 @@ export function deleteSkill(name: string): void {
     throw new Error(`Skill "${name}" does not exist`);
   }
   rmSync(skillDir, { recursive: true, force: true });
+
+  // Also clean up compiled version in dist/ to prevent stale skills from loading
+  const distDir = path.join(process.cwd(), "dist", "skills", name);
+  if (existsSync(distDir)) {
+    rmSync(distDir, { recursive: true, force: true });
+  }
 }
