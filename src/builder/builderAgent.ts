@@ -216,15 +216,20 @@ function parseResponse(text: string): any {
   return JSON.parse(cleaned);
 }
 
-export async function generate(request: BuilderRequest, apiKey: string): Promise<BuilderResult> {
+export async function generate(request: BuilderRequest, apiKey: string, userTestArgs?: Record<string, unknown>): Promise<BuilderResult> {
   const languageHint = request.language && request.language !== "auto"
     ? `\n\nThe user has requested the skill be written in ${request.language}. Honor this choice.`
+    : "";
+
+  const testArgsHint = userTestArgs
+    ? `\n\nThe user has provided these test arguments for smoke testing: ${JSON.stringify(userTestArgs)}
+Use these EXACT key names as your skill's parameter names so they map directly. Your sampleArgs should use these same values.`
     : "";
 
   const response = await callLLM(
     {
       messages: [
-        { role: "system", content: BUILDER_SYSTEM_PROMPT + languageHint },
+        { role: "system", content: BUILDER_SYSTEM_PROMPT + languageHint + testArgsHint },
         { role: "user", content: request.prompt },
       ],
     },
@@ -376,6 +381,77 @@ Fix the code to resolve this error. Return the corrected skill in the same JSON 
   };
 }
 
+/**
+ * Map user-provided test args to the skill's actual parameter names.
+ * If user keys match skill params exactly, use as-is.
+ * Otherwise, try to map by matching types/values to unmatched params.
+ */
+function mapUserArgsToParams(
+  userArgs: Record<string, unknown>,
+  parameters: Record<string, unknown>
+): Record<string, unknown> {
+  const props = (parameters as any)?.properties as Record<string, any> | undefined;
+  if (!props) return userArgs;
+
+  const paramNames = Object.keys(props);
+  const userKeys = Object.keys(userArgs);
+
+  // Check if any user keys match param names directly
+  const directMatches = userKeys.filter(k => paramNames.includes(k));
+  if (directMatches.length === userKeys.length) {
+    return userArgs; // All keys match, use as-is
+  }
+
+  // Build mapped args: start with any direct matches
+  const mapped: Record<string, unknown> = {};
+  const unmappedUserKeys: string[] = [];
+
+  for (const uk of userKeys) {
+    if (paramNames.includes(uk)) {
+      mapped[uk] = userArgs[uk];
+    } else {
+      unmappedUserKeys.push(uk);
+    }
+  }
+
+  // For unmatched user keys, try to map to unmatched params by type
+  const unmappedParams = paramNames.filter(p => !mapped[p]);
+
+  for (const uk of unmappedUserKeys) {
+    const userVal = userArgs[uk];
+    const userType = typeof userVal;
+
+    // Find best matching unmatched param
+    let bestParam: string | null = null;
+
+    for (const pp of unmappedParams) {
+      if (mapped[pp] !== undefined) continue; // already mapped
+      const paramDef = props[pp];
+      const paramType = paramDef?.type;
+
+      // Type match
+      if (
+        (paramType === "string" && userType === "string") ||
+        (paramType === "number" && userType === "number") ||
+        (paramType === "integer" && userType === "number") ||
+        (paramType === "boolean" && userType === "boolean")
+      ) {
+        bestParam = pp;
+        break;
+      }
+    }
+
+    if (bestParam) {
+      mapped[bestParam] = userVal;
+    } else {
+      // No match found — include under original key as fallback
+      mapped[uk] = userVal;
+    }
+  }
+
+  return mapped;
+}
+
 export async function buildSkill(
   request: BuilderRequest,
   apiKey: string,
@@ -383,7 +459,7 @@ export async function buildSkill(
   userTestArgs?: Record<string, unknown>
 ): Promise<BuilderResult> {
   // Generate the skill code via LLM
-  let result = await generate(request, apiKey);
+  let result = await generate(request, apiKey, userTestArgs);
   result.attempts = 1;
   result.retryLog = [];
 
@@ -431,7 +507,9 @@ export async function buildSkill(
 
     // Run smoke test if validation passed — user-provided args take priority
     try {
-      const effectiveTestArgs = userTestArgs ?? result.sampleArgs;
+      const effectiveTestArgs = userTestArgs
+        ? mapUserArgsToParams(userTestArgs, result.parameters)
+        : result.sampleArgs;
       result.smokeTest = await smokeTest(result.name, result.language, result.parameters, effectiveTestArgs);
     } catch (err: any) {
       result.smokeTest = { passed: false, output: "", error: err.message, duration: 0 };
