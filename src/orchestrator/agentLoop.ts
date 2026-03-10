@@ -2,7 +2,8 @@ import { Message, ToolCall, ToolResult, SkillMeta, OnStream } from "../types.js"
 import { readFileSync, appendFileSync, mkdirSync, existsSync } from "fs";
 import path from "path";
 import { callLLM } from "../llm/router.js";
-import { assertSafe } from "../security/safetySpine.js";
+import { checkSafe } from "../security/safetySpine.js";
+import { auditLogger } from "../security/auditLog.js";
 import {
   Session, SessionMessage,
   getOrCreateSession, appendToSession, compactIfNeeded, saveSession
@@ -120,17 +121,26 @@ export async function runAgentLoop(
 
       let output = "";
       let error: string | undefined;
+      const startTime = Date.now();
 
       if (!skill?.execute) {
         error = "Tool not found";
       } else {
         try {
-          validateArgs(parsed.args);
+          validateArgs(parsed.args, msg.channel, sid);
           output = await skill.execute(parsed.args, msg);
         } catch (err: any) {
           error = err.message;
         }
       }
+
+      const durationMs = Date.now() - startTime;
+
+      // Log tool execution to audit trail
+      auditLogger.logToolExec(
+        parsed.name, parsed.args, msg.channel, sid,
+        durationMs, !error, error
+      );
 
       toolResults.push({ name: parsed.name, output, error });
       onStream?.({ type: "tool_result", name: parsed.name, output, error });
@@ -152,14 +162,24 @@ export async function runAgentLoop(
   return { final: finalText, toolResults, sessionId: sid };
 }
 
-function validateArgs(args: any) {
+function validateArgs(args: any, channel?: string, sessionId?: string) {
   if (!args || typeof args !== "object") return;
   const scan = (val: any) => {
     if (Array.isArray(val)) return val.forEach(scan);
     if (val && typeof val === "object") {
       for (const [k, v] of Object.entries(val)) {
         if (typeof v === "string" && /(command|cmd|script)/i.test(k)) {
-          assertSafe(v);
+          const result = checkSafe(v);
+          if (result.blocked) {
+            auditLogger.logBlock(
+              result.label ?? "unknown",
+              v,
+              channel ?? "unknown",
+              sessionId ?? "unknown",
+              result.patternIndex
+            );
+            throw new Error(`Blocked by SafetySpine [${result.label}]: command matches forbidden pattern`);
+          }
         }
         scan(v);
       }

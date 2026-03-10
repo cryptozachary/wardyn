@@ -16,6 +16,7 @@ import { listSessions, loadSession, cleanExpiredSessions } from "./orchestrator/
 import { getProviderName, setProviderName } from "./llm/router.js";
 import { buildSkill } from "./builder/builderAgent.js";
 import { deleteSkill, isProtected } from "./builder/skillWriter.js";
+import { auditLogger } from "./security/auditLog.js";
 import { createServer } from "http";
 import dotenv from "dotenv";
 dotenv.config();
@@ -380,6 +381,34 @@ app.get("/api/sessions/:id", requireAuth, (req, res) => {
   const session = loadSession(req.params.id);
   if (!session) return res.status(404).json({ ok: false, error: "session not found" });
   res.json(session);
+});
+
+// --- Security Audit endpoints ---
+app.get("/api/security/events", requireAuth, (req, res) => {
+  const limit = Math.min(Number(req.query.limit) || 50, 500);
+  const offset = Number(req.query.offset) || 0;
+  const type = req.query.type as "block" | "tool_exec" | undefined;
+  const result = auditLogger.getRecentEvents(limit, offset, type);
+  res.json({ ok: true, ...result });
+});
+
+app.get("/api/security/stats", requireAuth, (_req, res) => {
+  res.json({ ok: true, stats: auditLogger.getStats() });
+});
+
+app.get("/api/security/patterns", requireAuth, (_req, res) => {
+  res.json({ ok: true, patterns: auditLogger.getPatternHitCounts() });
+});
+
+app.get("/api/security/export", requireAuth, (_req, res) => {
+  res.setHeader("Content-Type", "application/jsonl");
+  res.setHeader("Content-Disposition", "attachment; filename=audit.jsonl");
+  res.send(auditLogger.exportLog());
+});
+
+app.post("/api/security/clear", requireAuth, (_req, res) => {
+  auditLogger.clearLog();
+  res.json({ ok: true });
 });
 
 app.get('/health', (_req, res) => res.json({ ok: true, provider: getProviderName(), discord: isDiscordBotRunning() }));

@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Secure-Claw Security Audit</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0c162f; color: #e2e8f0; min-height: 100vh; }
+
+    .header { display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: #141d35; border-bottom: 1px solid #1e2d4a; flex-wrap: wrap; }
+    .header h1 { font-size: 16px; font-weight: 600; color: #94a3b8; }
+    .nav-links { display: flex; gap: 8px; margin-left: auto; }
+    .nav-link { padding: 6px 12px; border: 1px solid #1e2d4a; border-radius: 6px; background: #1e293b; color: #94a3b8; font-size: 12px; text-decoration: none; }
+    .nav-link:hover { background: #2d3a52; color: #e2e8f0; }
+    .nav-link.active { background: #0f62fe; color: #fff; border-color: #0f62fe; }
+
+    .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+
+    section { background: #141d35; border: 1px solid #1e2d4a; border-radius: 10px; padding: 20px; margin-bottom: 16px; }
+    section h2 { font-size: 14px; font-weight: 600; color: #94a3b8; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+
+    /* Threat banner */
+    .threat-banner { display: flex; align-items: center; gap: 12px; padding: 16px 20px; border-radius: 10px; margin-bottom: 16px; }
+    .threat-banner.low { background: #14532d; border: 1px solid #22c55e; }
+    .threat-banner.medium { background: #422006; border: 1px solid #eab308; }
+    .threat-banner.high { background: #431407; border: 1px solid #f97316; }
+    .threat-banner.critical { background: #450a0a; border: 1px solid #ef4444; }
+    .threat-level { font-size: 24px; font-weight: 700; text-transform: uppercase; }
+    .threat-banner.low .threat-level { color: #4ade80; }
+    .threat-banner.medium .threat-level { color: #facc15; }
+    .threat-banner.high .threat-level { color: #fb923c; }
+    .threat-banner.critical .threat-level { color: #f87171; }
+    .threat-detail { font-size: 13px; color: #94a3b8; }
+    .threat-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+    .threat-banner.low .threat-dot { background: #22c55e; box-shadow: 0 0 8px #22c55e88; }
+    .threat-banner.medium .threat-dot { background: #eab308; box-shadow: 0 0 8px #eab30888; }
+    .threat-banner.high .threat-dot { background: #f97316; box-shadow: 0 0 8px #f9731688; }
+    .threat-banner.critical .threat-dot { background: #ef4444; box-shadow: 0 0 8px #ef444488; animation: pulse 1.5s infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+    /* Summary cards */
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 16px; }
+    .card { background: #141d35; border: 1px solid #1e2d4a; border-radius: 10px; padding: 16px; text-align: center; }
+    .card .value { font-size: 28px; font-weight: 700; color: #e2e8f0; }
+    .card .label { font-size: 11px; color: #64748b; text-transform: uppercase; margin-top: 4px; }
+    .card.danger .value { color: #f87171; }
+    .card.success .value { color: #4ade80; }
+
+    /* Events feed */
+    .events-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+    .events-header h2 { margin-bottom: 0; }
+    .auto-refresh { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #64748b; }
+    .auto-refresh input { accent-color: #0f62fe; }
+    .filter-group { display: flex; gap: 4px; }
+    .filter-btn { padding: 4px 10px; border: 1px solid #1e2d4a; border-radius: 4px; background: #1e293b; color: #64748b; font-size: 11px; cursor: pointer; }
+    .filter-btn.active { background: #0f62fe; color: #fff; border-color: #0f62fe; }
+
+    .event-list { max-height: 400px; overflow-y: auto; }
+    .event-row { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 6px; margin-bottom: 4px; font-size: 13px; }
+    .event-row.block { background: #1a0a0a; border-left: 3px solid #ef4444; }
+    .event-row.tool_exec { background: #0a1a2a; border-left: 3px solid #3b82f6; }
+    .event-row.tool_exec.failed { border-left-color: #f97316; }
+    .event-time { font-family: monospace; font-size: 11px; color: #475569; min-width: 70px; }
+    .event-badge { padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 700; text-transform: uppercase; }
+    .event-badge.block { background: #7f1d1d; color: #fca5a5; }
+    .event-badge.tool_exec { background: #1e3a5f; color: #60a5fa; }
+    .event-detail { flex: 1; color: #94a3b8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .event-detail strong { color: #e2e8f0; }
+    .event-channel { font-size: 10px; color: #475569; padding: 2px 6px; background: #1e293b; border-radius: 4px; }
+    .event-duration { font-size: 11px; color: #64748b; min-width: 50px; text-align: right; }
+    .event-status { font-size: 11px; font-weight: 600; }
+    .event-status.ok { color: #4ade80; }
+    .event-status.fail { color: #f87171; }
+    .empty-state { text-align: center; color: #475569; padding: 40px; font-size: 13px; }
+
+    /* Two column layout */
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    @media (max-width: 800px) { .two-col { grid-template-columns: 1fr; } }
+
+    /* Bar chart */
+    .bar-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+    .bar-label { font-size: 12px; color: #94a3b8; min-width: 140px; }
+    .bar-track { flex: 1; height: 18px; background: #1e293b; border-radius: 4px; overflow: hidden; }
+    .bar-fill { height: 100%; background: #0f62fe; border-radius: 4px; transition: width 0.3s; min-width: 2px; }
+    .bar-fill.danger { background: #ef4444; }
+    .bar-count { font-size: 12px; color: #64748b; min-width: 30px; text-align: right; }
+
+    /* Table */
+    .audit-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .audit-table th { text-align: left; color: #64748b; font-weight: 600; padding: 8px; border-bottom: 1px solid #1e2d4a; }
+    .audit-table td { padding: 8px; color: #94a3b8; border-bottom: 1px solid #1e2d4a22; }
+    .audit-table tr:hover td { background: #1e293b44; }
+
+    /* Pattern list */
+    .pattern-regex { font-family: monospace; font-size: 11px; color: #60a5fa; }
+    .hit-badge { display: inline-block; min-width: 24px; text-align: center; padding: 2px 6px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+    .hit-badge.zero { background: #1e293b; color: #475569; }
+    .hit-badge.active { background: #7f1d1d; color: #fca5a5; }
+
+    /* Buttons */
+    .btn-group { display: flex; gap: 8px; margin-top: 16px; }
+    .btn { padding: 8px 16px; border: none; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; }
+    .btn-secondary { background: #1e293b; color: #94a3b8; border: 1px solid #1e2d4a; }
+    .btn-secondary:hover { background: #2d3a52; color: #e2e8f0; }
+    .btn-danger { background: #7f1d1d; color: #fca5a5; border: 1px solid #ef4444; }
+    .btn-danger:hover { background: #991b1b; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Secure-Claw</h1>
+    <div class="nav-links">
+      <a class="nav-link" href="/chat">Chat</a>
+      <a class="nav-link" href="/ui/setup.html">Setup</a>
+      <a class="nav-link" href="/ui/skills.html">Skills</a>
+      <a class="nav-link active" href="/ui/security.html">Security</a>
+    </div>
+  </div>
+
+  <div class="container">
+    <!-- Threat Level Banner -->
+    <div class="threat-banner low" id="threatBanner">
+      <div class="threat-dot"></div>
+      <span class="threat-level" id="threatLevel">LOW</span>
+      <span class="threat-detail" id="threatDetail">No blocks in the last hour</span>
+    </div>
+
+    <!-- Summary Cards -->
+    <div class="cards">
+      <div class="card danger"><div class="value" id="totalBlocks">0</div><div class="label">Total Blocks</div></div>
+      <div class="card"><div class="value" id="totalExecs">0</div><div class="label">Tool Executions</div></div>
+      <div class="card success"><div class="value" id="successRate">100%</div><div class="label">Success Rate</div></div>
+      <div class="card"><div class="value" id="lastBlock">-</div><div class="label">Last Block</div></div>
+    </div>
+
+    <!-- Recent Events -->
+    <section>
+      <div class="events-header">
+        <h2>Recent Events</h2>
+        <div style="display:flex; gap:12px; align-items:center;">
+          <div class="filter-group">
+            <button class="filter-btn active" data-filter="all">All</button>
+            <button class="filter-btn" data-filter="block">Blocks</button>
+            <button class="filter-btn" data-filter="tool_exec">Tools</button>
+          </div>
+          <label class="auto-refresh">
+            <input type="checkbox" id="autoRefresh" checked /> Auto-refresh
+          </label>
+        </div>
+      </div>
+      <div class="event-list" id="eventList">
+        <div class="empty-state">No events recorded yet</div>
+      </div>
+    </section>
+
+    <!-- Two column: Categories + Tool breakdown -->
+    <div class="two-col">
+      <section>
+        <h2>Blocks by Category</h2>
+        <div id="categoryChart"></div>
+      </section>
+      <section>
+        <h2>Tool Execution Breakdown</h2>
+        <table class="audit-table">
+          <thead><tr><th>Tool</th><th>Count</th><th>Failures</th><th>Avg Time</th></tr></thead>
+          <tbody id="toolTable"></tbody>
+        </table>
+      </section>
+    </div>
+
+    <!-- Pattern List -->
+    <section>
+      <h2>SafetySpine Patterns</h2>
+      <table class="audit-table">
+        <thead><tr><th>#</th><th>Category</th><th>Pattern</th><th>Hits</th></tr></thead>
+        <tbody id="patternTable"></tbody>
+      </table>
+    </section>
+
+    <!-- Actions -->
+    <div class="btn-group">
+      <button class="btn btn-secondary" id="exportBtn">Export Audit Log</button>
+      <button class="btn btn-danger" id="clearBtn">Clear Audit Log</button>
+    </div>
+  </div>
+
+<script>
+const token = localStorage.getItem('secureclaw_api_token') || '';
+function authHeaders() { return token ? { 'x-api-token': token } : {}; }
+let currentFilter = 'all';
+let refreshTimer = null;
+
+// --- Filter buttons ---
+document.querySelectorAll('.filter-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentFilter = btn.dataset.filter;
+    loadEvents();
+  });
+});
+
+// --- Auto-refresh ---
+function startRefresh() {
+  stopRefresh();
+  refreshTimer = setInterval(() => { loadStats(); loadEvents(); }, 5000);
+}
+function stopRefresh() { if (refreshTimer) clearInterval(refreshTimer); }
+document.getElementById('autoRefresh').addEventListener('change', (e) => {
+  if (e.target.checked) startRefresh(); else stopRefresh();
+});
+
+// --- Load Stats ---
+async function loadStats() {
+  try {
+    const r = await fetch('/api/security/stats', { headers: authHeaders() });
+    const j = await r.json();
+    if (!j.ok) return;
+    const s = j.stats;
+
+    document.getElementById('totalBlocks').textContent = s.totalBlocks;
+    document.getElementById('totalExecs').textContent = s.totalToolExecs;
+    document.getElementById('successRate').textContent = Math.round(s.toolExecSuccessRate * 100) + '%';
+
+    if (s.lastBlockTs) {
+      const ago = Math.round((Date.now() - s.lastBlockTs) / 1000);
+      document.getElementById('lastBlock').textContent = ago < 60 ? ago + 's ago' : ago < 3600 ? Math.round(ago / 60) + 'm ago' : Math.round(ago / 3600) + 'h ago';
+    } else {
+      document.getElementById('lastBlock').textContent = '-';
+    }
+
+    // Threat banner
+    const banner = document.getElementById('threatBanner');
+    banner.className = 'threat-banner ' + s.threatLevel;
+    document.getElementById('threatLevel').textContent = s.threatLevel.toUpperCase();
+    const blockCount = Object.values(s.blocksByCategory).reduce((a, b) => a + b, 0);
+    const detailMap = { low: 'No blocks in the last hour', medium: 'Some suspicious activity detected', high: 'Multiple blocked commands detected', critical: 'High volume of blocked commands!' };
+    document.getElementById('threatDetail').textContent = detailMap[s.threatLevel] || '';
+
+    // Category chart
+    const chartDiv = document.getElementById('categoryChart');
+    const cats = Object.entries(s.blocksByCategory).sort((a, b) => b[1] - a[1]);
+    const maxCat = cats.length > 0 ? cats[0][1] : 1;
+    if (cats.length === 0) {
+      chartDiv.innerHTML = '<div class="empty-state">No blocks recorded</div>';
+    } else {
+      chartDiv.innerHTML = cats.map(([label, count]) =>
+        `<div class="bar-row"><span class="bar-label">${esc(label)}</span><div class="bar-track"><div class="bar-fill danger" style="width:${Math.round(count / maxCat * 100)}%"></div></div><span class="bar-count">${count}</span></div>`
+      ).join('');
+    }
+
+    // Tool table
+    const tbody = document.getElementById('toolTable');
+    const tools = Object.entries(s.toolExecsByName).sort((a, b) => b[1].total - a[1].total);
+    if (tools.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="4" class="empty-state">No tool executions</td></tr>';
+    } else {
+      tbody.innerHTML = tools.map(([name, d]) =>
+        `<tr><td><strong>${esc(name)}</strong></td><td>${d.total}</td><td style="color:${d.failures > 0 ? '#f87171' : '#4ade80'}">${d.failures}</td><td>${d.avgDurationMs}ms</td></tr>`
+      ).join('');
+    }
+  } catch {}
+}
+
+// --- Load Events ---
+async function loadEvents() {
+  try {
+    const typeParam = currentFilter !== 'all' ? `&type=${currentFilter}` : '';
+    const r = await fetch(`/api/security/events?limit=100${typeParam}`, { headers: authHeaders() });
+    const j = await r.json();
+    if (!j.ok) return;
+
+    const list = document.getElementById('eventList');
+    if (j.events.length === 0) {
+      list.innerHTML = '<div class="empty-state">No events recorded yet</div>';
+      return;
+    }
+
+    list.innerHTML = j.events.map(evt => {
+      const time = new Date(evt.ts).toLocaleTimeString();
+      if (evt.type === 'block') {
+        return `<div class="event-row block">
+          <span class="event-time">${time}</span>
+          <span class="event-badge block">BLOCK</span>
+          <span class="event-detail"><strong>${esc(evt.patternLabel || '')}</strong> &mdash; ${esc(evt.blockedCommand || '')}</span>
+          <span class="event-channel">${esc(evt.channel)}</span>
+        </div>`;
+      } else {
+        const failed = evt.success === false;
+        return `<div class="event-row tool_exec${failed ? ' failed' : ''}">
+          <span class="event-time">${time}</span>
+          <span class="event-badge tool_exec">TOOL</span>
+          <span class="event-detail"><strong>${esc(evt.toolName || '')}</strong>${evt.error ? ' &mdash; ' + esc(evt.error.slice(0, 80)) : ''}</span>
+          <span class="event-duration">${evt.durationMs != null ? evt.durationMs + 'ms' : ''}</span>
+          <span class="event-status ${failed ? 'fail' : 'ok'}">${failed ? 'FAIL' : 'OK'}</span>
+          <span class="event-channel">${esc(evt.channel)}</span>
+        </div>`;
+      }
+    }).join('');
+  } catch {}
+}
+
+// --- Load Patterns ---
+async function loadPatterns() {
+  try {
+    const r = await fetch('/api/security/patterns', { headers: authHeaders() });
+    const j = await r.json();
+    if (!j.ok) return;
+
+    const tbody = document.getElementById('patternTable');
+    tbody.innerHTML = j.patterns.map(p =>
+      `<tr><td>${p.index + 1}</td><td>${esc(p.label)}</td><td><span class="pattern-regex">${esc(p.regex)}</span></td><td><span class="hit-badge ${p.hitCount > 0 ? 'active' : 'zero'}">${p.hitCount}</span></td></tr>`
+    ).join('');
+  } catch {}
+}
+
+// --- Export ---
+document.getElementById('exportBtn').addEventListener('click', async () => {
+  try {
+    const r = await fetch('/api/security/export', { headers: authHeaders() });
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'audit.jsonl'; a.click();
+    URL.revokeObjectURL(url);
+  } catch {}
+});
+
+// --- Clear ---
+document.getElementById('clearBtn').addEventListener('click', async () => {
+  if (!confirm('Clear all audit data? This cannot be undone.')) return;
+  try {
+    await fetch('/api/security/clear', { method: 'POST', headers: authHeaders() });
+    loadStats(); loadEvents(); loadPatterns();
+  } catch {}
+});
+
+// --- Helpers ---
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+// --- Init ---
+loadStats();
+loadEvents();
+loadPatterns();
+startRefresh();
+</script>
+</body>
+</html>
