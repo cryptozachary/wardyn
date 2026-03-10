@@ -51,6 +51,10 @@
     .delete-btn { background: none; border: none; color: #64748b; cursor: pointer; font-size: 16px; padding: 2px 6px; width: auto; margin: 0; }
     .delete-btn:hover { color: #fca5a5; }
     .protected { color: #475569; font-size: 11px; }
+    .secrets-badge { display: inline-block; font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 4px; margin-left: 6px; }
+    .secrets-badge.ok { background: #166534; color: #86efac; }
+    .secrets-badge.missing { background: #7f1d1d; color: #fca5a5; }
+    .secrets-badge.none { background: #1e2d4a; color: #64748b; }
 
     /* Build section */
     .build-row { display: grid; grid-template-columns: 1fr 200px; gap: 12px; align-items: end; }
@@ -194,16 +198,34 @@ async function fetchProvider() {
 async function loadSkills() {
   const body = document.getElementById('skillsBody');
   try {
-    const r = await fetch('/api/skills', { headers: authHeaders() });
-    const j = await r.json();
+    const [skillsRes, secretsRes] = await Promise.all([
+      fetch('/api/skills', { headers: authHeaders() }),
+      fetch('/api/skill-secrets', { headers: authHeaders() })
+    ]);
+    const j = await skillsRes.json();
+    const sj = await secretsRes.json();
+    const configuredSecrets = sj.secrets || {};
+
     if (!j.skills || j.skills.length === 0) {
       body.innerHTML = '<tr><td colspan="4" style="color:#475569">No skills installed</td></tr>';
       return;
     }
     body.innerHTML = j.skills.map(s => {
       const prot = PROTECTED.has(s.name);
+      let secretsBadge = '';
+      if (s.secrets && Object.keys(s.secrets).length > 0) {
+        const required = Object.entries(s.secrets).filter(([,v]) => v.required);
+        const configured = configuredSecrets[s.name] ? Object.keys(configuredSecrets[s.name]) : [];
+        const missing = required.filter(([k]) => !configured.includes(k));
+        if (missing.length > 0) {
+          const names = missing.map(([k]) => k).join(', ');
+          secretsBadge = `<span class="secrets-badge missing" title="Missing: ${esc(names)}">keys needed</span>`;
+        } else {
+          secretsBadge = `<span class="secrets-badge ok" title="All secrets configured">keys ok</span>`;
+        }
+      }
       return `<tr>
-        <td class="skill-name">${esc(s.name)}</td>
+        <td class="skill-name">${esc(s.name)}${secretsBadge}</td>
         <td>${esc(s.description.slice(0, 100))}</td>
         <td><span class="skill-status ${s.hasExecute ? 'active' : 'inactive'}"></span></td>
         <td>${prot

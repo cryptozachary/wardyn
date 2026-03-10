@@ -18,6 +18,7 @@ import { buildSkill } from "./builder/builderAgent.js";
 import { deleteSkill, isProtected } from "./builder/skillWriter.js";
 import { auditLogger } from "./security/auditLog.js";
 import { exportSkill, importSkill, importFromUrl, listPackages, getPackage, deletePackage } from "./hub/hubManager.js";
+import { getMaskedSecrets, setSkillSecret, deleteSkillSecret } from "./security/skillSecrets.js";
 import { createServer } from "http";
 import dotenv from "dotenv";
 dotenv.config();
@@ -215,6 +216,7 @@ app.get("/api/skills", requireAuth, (_req, res) => {
       name: s.name,
       description: s.description,
       hasExecute: !!s.execute,
+      secrets: s.secrets,
     })),
   });
 });
@@ -307,6 +309,29 @@ app.delete("/api/hub/packages/:name", requireAuth, (req, res) => {
   } catch (err: any) {
     res.status(400).json({ ok: false, error: err.message });
   }
+});
+
+// --- Skill Secrets endpoints ---
+app.get("/api/skill-secrets", requireAuth, (_req, res) => {
+  res.json({ ok: true, secrets: getMaskedSecrets() });
+});
+
+app.post("/api/skill-secrets", requireAuth, (req, res) => {
+  const { skill, key, value } = req.body || {};
+  if (!skill || !key || typeof value !== "string") {
+    return res.status(400).json({ ok: false, error: "skill, key, and value are required" });
+  }
+  setSkillSecret(skill, key, value);
+  res.json({ ok: true });
+});
+
+app.delete("/api/skill-secrets", requireAuth, (req, res) => {
+  const { skill, key } = req.body || {};
+  if (!skill || !key) {
+    return res.status(400).json({ ok: false, error: "skill and key are required" });
+  }
+  deleteSkillSecret(skill, key);
+  res.json({ ok: true });
 });
 
 app.post('/webhook/telegram', rateLimit, async (req, res) => {

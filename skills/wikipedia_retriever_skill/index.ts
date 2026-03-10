@@ -49,7 +49,7 @@ export async function execute(args: any): Promise<string> {
       }));
       return JSON.stringify(results, null, 2);
     }
-  } catch (error) {
+  } catch (error: any) {
     return "Error retrieving data from Wikipedia: " + error.message;
   }
 }

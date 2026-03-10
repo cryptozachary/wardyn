@@ -22,6 +22,32 @@ Choose TypeScript unless:
 - The task requires native system performance (image processing, compression, heavy computation) -> use Go or C++
 - The user explicitly requests a specific language
 
+## API Keys & Secrets
+
+If the skill requires an API key or secret token, NEVER hardcode it. Instead:
+
+1. Declare required secrets via a \`secrets\` export so the UI can show what's needed:
+
+\`\`\`typescript
+export const secrets = {
+  API_KEY_NAME: { description: "API key from example.com", required: true }
+};
+\`\`\`
+
+2. Read them at runtime via \`getSkillSecret\`:
+
+\`\`\`typescript
+import { getSkillSecret } from '../../src/security/skillSecrets.js';
+
+// In execute():
+const apiKey = getSkillSecret('your_skill_name', 'API_KEY_NAME');
+if (!apiKey) throw new Error('API_KEY_NAME not configured. Add it in Setup > Skill Secrets.');
+\`\`\`
+
+Do NOT add the API key as a skill parameter — secrets are configured once by the user in the Setup page, not passed per-invocation.
+
+Include the \`secrets\` export in your JSON response as a "secrets" field (object mapping key names to { description, required }).
+
 ## TypeScript Skill Format
 
 For TypeScript, generate a complete index.ts file:
@@ -90,6 +116,7 @@ Respond with ONLY a JSON object. No markdown fences, no explanation, just raw JS
   "language": "typescript",
   "description": "One-line description",
   "parameters": { "type": "object", "properties": { ... }, "required": [...] },
+  "secrets": { "API_KEY_NAME": { "description": "...", "required": true } },
   "code": "the complete source code as a single string",
   "skillMd": "1-3 sentence description for SKILL.md",
   "sampleArgs": { "arg1": "realistic test value", "arg2": 42 }
@@ -253,7 +280,7 @@ Use these EXACT key names as your skill's parameter names so they map directly. 
   }
 
   // Validate required fields
-  const { name, language, description, parameters, code, skillMd, sampleArgs } = parsed;
+  const { name, language, description, parameters, secrets, code, skillMd, sampleArgs } = parsed;
   if (!name || !language || !code) {
     throw new Error("Builder response missing required fields (name, language, code)");
   }
@@ -287,6 +314,7 @@ Use these EXACT key names as your skill's parameter names so they map directly. 
     language,
     description: description ?? "Generated skill",
     parameters: parameters ?? {},
+    secrets: secrets ?? undefined,
     code,
     wrapperCode,
     skillMd: skillMd ?? description ?? "Generated skill",
@@ -355,7 +383,7 @@ Fix the code to resolve this error. Return the corrected skill in the same JSON 
     throw new Error(`Failed to parse retry response as JSON`);
   }
 
-  const { name, description, parameters, code, skillMd, sampleArgs } = parsed;
+  const { name, description, parameters, secrets, code, skillMd, sampleArgs } = parsed;
   if (!code) {
     throw new Error("Retry response missing code field");
   }
@@ -376,6 +404,7 @@ Fix the code to resolve this error. Return the corrected skill in the same JSON 
     language,
     description: description ?? "Generated skill",
     parameters: parameters ?? {},
+    secrets: secrets ?? undefined,
     code,
     wrapperCode,
     skillMd: skillMd ?? description ?? "Generated skill",

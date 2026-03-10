@@ -146,6 +146,22 @@
     </section>
 
     <section>
+      <h2>Skill Secrets</h2>
+      <p style="color:#64748b; font-size:12px; margin-bottom:12px;">Store API keys and tokens that skills need at runtime. Secrets are saved to <code style="color:#60a5fa">config/skill-secrets.json</code> and never sent to the LLM.</p>
+      <div id="secretsList"></div>
+      <div style="margin-top:12px; border-top:1px solid #1e2d4a; padding-top:12px;">
+        <label>Add / Update Secret</label>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+          <input id="secretSkill" placeholder="skill name (e.g. taapi_io_price_retriever_skill)" />
+          <input id="secretKey" placeholder="key name (e.g. TAAPI_API_KEY)" />
+        </div>
+        <input id="secretValue" type="password" placeholder="secret value" style="margin-top:6px;" />
+        <button id="saveSecretBtn" class="btn-secondary" style="margin-top:8px;">Save Secret</button>
+        <p class="msg" id="secretMsg"></p>
+      </div>
+    </section>
+
+    <section>
       <h2>Health Check</h2>
       <button id="healthBtn" class="btn-secondary">Ping /health</button>
       <pre id="healthOut"></pre>
@@ -470,6 +486,113 @@ document.getElementById('saveChannels').onclick = async () => {
   }
 };
 
+// --- Skill Secrets ---
+async function loadSecrets() {
+  const list = document.getElementById('secretsList');
+  try {
+    const [secretsRes, skillsRes] = await Promise.all([
+      fetch('/api/skill-secrets', { headers: authHeaders() }),
+      fetch('/api/skills', { headers: authHeaders() })
+    ]);
+    const sj = await secretsRes.json();
+    const kj = await skillsRes.json();
+    const configured = (sj.ok && sj.secrets) ? sj.secrets : {};
+    const skills = kj.skills || [];
+
+    // Build a merged view: required secrets from skills + any manually configured ones
+    const rows = [];
+
+    // First: skills that declare secrets (required keys shown with status)
+    for (const skill of skills) {
+      if (!skill.secrets) continue;
+      for (const [key, def] of Object.entries(skill.secrets)) {
+        const isSet = configured[skill.name] && configured[skill.name][key];
+        const masked = isSet ? configured[skill.name][key] : '';
+        rows.push({ skill: skill.name, key, description: def.description, required: def.required, masked, isSet: !!isSet });
+      }
+    }
+
+    // Then: any configured secrets not declared by a skill (manually added)
+    for (const [skill, keys] of Object.entries(configured)) {
+      for (const [key, masked] of Object.entries(keys)) {
+        if (!rows.find(r => r.skill === skill && r.key === key)) {
+          rows.push({ skill, key, description: '', required: false, masked, isSet: true });
+        }
+      }
+    }
+
+    if (rows.length === 0) {
+      list.innerHTML = '<p style="color:#475569; font-size:13px;">No skills require secrets.</p>';
+      return;
+    }
+
+    const td = 'style="padding:6px 8px; border-bottom:1px solid #1e2d4a;"';
+    let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+    html += `<tr style="color:#64748b; font-size:12px; text-transform:uppercase;"><th ${td} style="text-align:left;">Skill</th><th ${td} style="text-align:left;">Key</th><th ${td} style="text-align:left;">Status</th><th ${td}></th></tr>`;
+    for (const r of rows) {
+      const statusColor = r.isSet ? '#4ade80' : (r.required ? '#fca5a5' : '#64748b');
+      const statusText = r.isSet ? r.masked : (r.required ? 'missing' : 'not set');
+      const desc = r.description ? ` title="${esc(r.description)}"` : '';
+      html += `<tr>`;
+      html += `<td ${td} style="color:#60a5fa; font-weight:600;">${esc(r.skill)}</td>`;
+      html += `<td ${td}${desc} style="color:#cbd5e1; cursor:${r.description ? 'help' : 'default'};">${esc(r.key)}</td>`;
+      html += `<td ${td} style="color:${statusColor}; font-family:monospace; font-size:12px;">${esc(statusText)}</td>`;
+      html += `<td ${td}>${r.isSet ? `<button onclick="deleteSecret('${esc(r.skill)}','${esc(r.key)}')" style="background:none; border:none; color:#64748b; cursor:pointer; font-size:14px; width:auto; margin:0; padding:2px 6px;" title="Delete">&times;</button>` : ''}</td>`;
+      html += `</tr>`;
+    }
+    html += '</table>';
+    list.innerHTML = html;
+  } catch {
+    list.innerHTML = '<p style="color:#fca5a5; font-size:13px;">Failed to load secrets.</p>';
+  }
+}
+
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+
+document.getElementById('saveSecretBtn').onclick = async () => {
+  const skill = document.getElementById('secretSkill').value.trim();
+  const key = document.getElementById('secretKey').value.trim();
+  const value = document.getElementById('secretValue').value;
+  const msg = document.getElementById('secretMsg');
+  if (!skill || !key || !value) {
+    msg.textContent = 'Skill name, key name, and value are all required.';
+    msg.className = 'msg err';
+    return;
+  }
+  try {
+    const r = await fetch('/api/skill-secrets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ skill, key, value })
+    });
+    const j = await r.json();
+    if (j.ok) {
+      msg.textContent = `Saved ${key} for ${skill}`;
+      msg.className = 'msg ok';
+      document.getElementById('secretValue').value = '';
+      loadSecrets();
+    } else {
+      msg.textContent = 'Error: ' + j.error;
+      msg.className = 'msg err';
+    }
+  } catch (e) {
+    msg.textContent = 'Error: ' + e;
+    msg.className = 'msg err';
+  }
+};
+
+async function deleteSecret(skill, key) {
+  if (!confirm(`Delete secret "${key}" for "${skill}"?`)) return;
+  try {
+    await fetch('/api/skill-secrets', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ skill, key })
+    });
+    loadSecrets();
+  } catch {}
+}
+
 // --- Init ---
 loadToken();
 updateProviderUI();
@@ -477,6 +600,7 @@ fetchStatus();
 fetchProvider();
 loadMemory();
 loadChannelConfig();
+loadSecrets();
 </script>
 </body>
 </html>

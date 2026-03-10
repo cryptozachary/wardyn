@@ -1,0 +1,1 @@
+This skill retrieves price information for cryptocurrencies and stocks using the taapi.io API. Provide the asset symbol and type to get the current price data.

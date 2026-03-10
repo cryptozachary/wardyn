@@ -17,17 +17,18 @@ export function loadSkills(root = resolveSkillsRoot()): SkillMeta[] {
       const skillPath = path.join(root, dir.name);
       let execute;
       let parameters;
+      let secrets;
       try {
         const jsPath = path.join(skillPath, "index.js");
         const tsPath = path.join(skillPath, "index.ts");
-        if (existsSync(jsPath)) ({ execute, parameters } = require(jsPath));
-        else if (existsSync(tsPath)) ({ execute, parameters } = require(tsPath));
+        if (existsSync(jsPath)) ({ execute, parameters, secrets } = require(jsPath));
+        else if (existsSync(tsPath)) ({ execute, parameters, secrets } = require(tsPath));
       } catch {}
       let description = `Skill at ${dir.name}`;
       const mdPath = path.join(skillPath, "SKILL.md");
       if (existsSync(mdPath)) {
         try { description = readFileSync(mdPath, "utf8").trim(); } catch {}
       }
-      return { name: dir.name, description, path: skillPath, parameters, execute };
+      return { name: dir.name, description, path: skillPath, parameters, secrets, execute };
     });
 }

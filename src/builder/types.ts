@@ -3,11 +3,17 @@ export interface BuilderRequest {
   language?: "auto" | "typescript" | "python" | "go" | "cpp";
 }
 
+export interface SkillSecretDef {
+  description: string;
+  required?: boolean;
+}
+
 export interface BuilderResult {
   name: string;
   language: string;
   description: string;
   parameters: Record<string, unknown>;
+  secrets?: Record<string, SkillSecretDef>;
   code: string;
   wrapperCode?: string;
   skillMd: string;
