@@ -17,6 +17,7 @@ import { getProviderName, setProviderName } from "./llm/router.js";
 import { buildSkill } from "./builder/builderAgent.js";
 import { deleteSkill, isProtected } from "./builder/skillWriter.js";
 import { auditLogger } from "./security/auditLog.js";
+import { exportSkill, importSkill, importFromUrl, listPackages, getPackage, deletePackage } from "./hub/hubManager.js";
 import { createServer } from "http";
 import dotenv from "dotenv";
 dotenv.config();
@@ -248,6 +249,60 @@ app.delete("/api/skills/:name", requireAuth, (req, res) => {
   try {
     deleteSkill(name);
     reloadSkills();
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
+});
+
+// --- ClawHub endpoints ---
+app.get("/api/hub/packages", requireAuth, (_req, res) => {
+  res.json({ ok: true, packages: listPackages() });
+});
+
+app.post("/api/hub/export", requireAuth, (req, res) => {
+  const { name, version, author } = req.body || {};
+  if (!name) return res.status(400).json({ ok: false, error: "name is required" });
+  try {
+    const pkg = exportSkill(name, author || "anonymous", version);
+    res.json({ ok: true, package: pkg });
+  } catch (err: any) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
+});
+
+app.post("/api/hub/import", requireAuth, async (req, res) => {
+  const smokeTest = req.query.smokeTest === "true";
+  try {
+    const result = await importSkill(req.body, smokeTest);
+    if (result.success) reloadSkills();
+    res.json({ ok: result.success, error: result.error });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.post("/api/hub/import-url", requireAuth, async (req, res) => {
+  const { url, smokeTest } = req.body || {};
+  if (!url) return res.status(400).json({ ok: false, error: "url is required" });
+  try {
+    const result = await importFromUrl(url, smokeTest === true);
+    if (result.success) reloadSkills();
+    res.json({ ok: result.success, error: result.error });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.get("/api/hub/packages/:name", rateLimit, (req, res) => {
+  const pkg = getPackage(req.params.name);
+  if (!pkg) return res.status(404).json({ ok: false, error: "Package not found" });
+  res.json(pkg);
+});
+
+app.delete("/api/hub/packages/:name", requireAuth, (req, res) => {
+  try {
+    deletePackage(req.params.name);
     res.json({ ok: true });
   } catch (err: any) {
     res.status(400).json({ ok: false, error: err.message });

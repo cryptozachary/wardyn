@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Secure-Claw — ClawHub</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0c162f; color: #e2e8f0; min-height: 100vh; padding: 24px 16px; }
+    .container { max-width: 800px; margin: 0 auto; }
+    h1 { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
+    .subtitle { font-size: 13px; color: #64748b; margin-bottom: 20px; }
+    .provider-badge { display: inline-block; padding: 3px 10px; border-radius: 12px; background: #1e3a5f; color: #60a5fa; font-size: 12px; font-weight: 600; margin-left: 8px; vertical-align: middle; }
+    .provider-badge.ollama { background: #1a3320; color: #4ade80; }
+    .provider-badge.anthropic { background: #2d1f3d; color: #c084fc; }
+
+    .header-row { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+    .header-row h1 { margin-bottom: 0; }
+    .nav-links { margin-left: auto; display: flex; gap: 12px; }
+    .nav-links a { color: #60a5fa; font-size: 13px; text-decoration: none; }
+    .nav-links a:hover { text-decoration: underline; }
+
+    section { background: #141d35; border: 1px solid #1e2d4a; border-radius: 10px; padding: 20px; margin-bottom: 16px; }
+    section h2 { font-size: 15px; font-weight: 600; color: #94a3b8; margin-bottom: 12px; }
+
+    label { display: block; margin: 10px 0 4px; font-size: 13px; font-weight: 600; color: #94a3b8; }
+    input, textarea, select { width: 100%; padding: 9px 12px; border-radius: 6px; border: 1px solid #1e2d4a; background: #1e293b; color: #e2e8f0; font-size: 14px; font-family: inherit; }
+    input::placeholder, textarea::placeholder { color: #475569; }
+    input:focus, textarea:focus, select:focus { outline: none; border-color: #0f62fe; }
+    select { cursor: pointer; appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2364748b' d='M6 8L1 3h10z'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; padding-right: 32px; }
+
+    button { width: 100%; margin-top: 10px; padding: 10px; border: none; border-radius: 6px; background: #0f62fe; color: #fff; font-weight: 700; font-size: 14px; cursor: pointer; transition: background 0.15s; }
+    button:hover:not(:disabled) { background: #2563eb; }
+    button:disabled { background: #1e3a5f; color: #475569; cursor: not-allowed; }
+    .btn-danger { background: #991b1b; }
+    .btn-danger:hover:not(:disabled) { background: #b91c1c; }
+    .btn-sm { width: auto; margin: 0; padding: 5px 12px; font-size: 12px; }
+
+    .msg { font-size: 13px; margin-top: 8px; min-height: 18px; }
+    .msg.ok { color: #4ade80; }
+    .msg.err { color: #fca5a5; }
+
+    /* Packages table */
+    .pkg-table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+    .pkg-table th, .pkg-table td { text-align: left; padding: 8px 12px; border-bottom: 1px solid #1e2d4a; font-size: 13px; }
+    .pkg-table th { color: #64748b; font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .pkg-table td { color: #cbd5e1; }
+    .pkg-table tr:hover td { background: #1e293b; }
+    .pkg-name { font-weight: 600; color: #60a5fa; }
+    .lang-tag { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+    .lang-tag.typescript { background: #1e3a5f; color: #60a5fa; }
+    .lang-tag.python { background: #2d1f3d; color: #c084fc; }
+    .lang-tag.go { background: #1a3320; color: #4ade80; }
+    .lang-tag.cpp { background: #3d2b1f; color: #fbbf24; }
+    .action-btn { background: none; border: none; color: #64748b; cursor: pointer; font-size: 14px; padding: 2px 6px; width: auto; margin: 0 2px; }
+    .action-btn:hover { color: #e2e8f0; }
+    .action-btn.del:hover { color: #fca5a5; }
+
+    /* Export row */
+    .export-row { display: grid; grid-template-columns: 1fr 120px 140px; gap: 12px; align-items: end; }
+
+    /* Import tabs */
+    .import-tabs { display: flex; gap: 0; margin-bottom: 12px; }
+    .tab-btn { flex: 1; padding: 8px; border: 1px solid #1e2d4a; background: #1e293b; color: #64748b; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.15s; }
+    .tab-btn:first-child { border-radius: 6px 0 0 6px; }
+    .tab-btn:last-child { border-radius: 0 6px 6px 0; }
+    .tab-btn.active { background: #0f62fe; color: #fff; border-color: #0f62fe; }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    /* Drop zone */
+    .drop-zone { border: 2px dashed #1e2d4a; border-radius: 8px; padding: 24px; text-align: center; color: #475569; font-size: 13px; cursor: pointer; transition: all 0.2s; }
+    .drop-zone:hover, .drop-zone.dragover { border-color: #0f62fe; color: #60a5fa; background: #0f62fe10; }
+    .drop-zone input { display: none; }
+
+    .checkbox-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+    .checkbox-row input { width: auto; }
+    .checkbox-row label { margin: 0; font-size: 13px; }
+
+    .empty-state { color: #475569; font-size: 13px; padding: 16px; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header-row">
+      <h1>ClawHub</h1>
+      <span id="activeProvider" class="provider-badge">--</span>
+      <div class="nav-links">
+        <a href="/chat">Chat</a>
+        <a href="/ui/skills.html">Skills</a>
+        <a href="/ui/setup.html">Setup</a>
+        <a href="/ui/security.html">Security</a>
+      </div>
+    </div>
+    <p class="subtitle">Export, import, and share skills between Secure-Claw instances</p>
+
+    <!-- Local Packages -->
+    <section>
+      <h2>Exported Packages</h2>
+      <table class="pkg-table" id="pkgTable" style="display:none">
+        <thead>
+          <tr><th>Name</th><th>Language</th><th>Version</th><th>Author</th><th>Exported</th><th></th></tr>
+        </thead>
+        <tbody id="pkgBody"></tbody>
+      </table>
+      <div class="empty-state" id="pkgEmpty">No packages exported yet</div>
+    </section>
+
+    <!-- Export -->
+    <section>
+      <h2>Export a Skill</h2>
+      <div class="export-row">
+        <div>
+          <label for="exportSkill">Skill</label>
+          <select id="exportSkill"><option value="">Loading...</option></select>
+        </div>
+        <div>
+          <label for="exportVersion">Version</label>
+          <input id="exportVersion" value="1.0.0" placeholder="1.0.0" />
+        </div>
+        <div>
+          <label for="exportAuthor">Author</label>
+          <input id="exportAuthor" placeholder="anonymous" />
+        </div>
+      </div>
+      <button id="exportBtn">Export</button>
+      <div class="msg" id="exportMsg"></div>
+    </section>
+
+    <!-- Import -->
+    <section>
+      <h2>Import a Skill</h2>
+      <div class="import-tabs">
+        <button class="tab-btn active" data-tab="file">File Upload</button>
+        <button class="tab-btn" data-tab="url">URL Import</button>
+      </div>
+
+      <div class="tab-panel active" id="tab-file">
+        <div class="drop-zone" id="dropZone">
+          Drop a .claw file here or click to browse
+          <input type="file" id="fileInput" accept=".claw,.json" />
+        </div>
+        <div id="fileName" style="margin-top:6px; font-size:12px; color:#64748b;"></div>
+      </div>
+
+      <div class="tab-panel" id="tab-url">
+        <label for="importUrl">Package URL</label>
+        <input id="importUrl" placeholder="http://192.168.1.50:3000/api/hub/packages/skill_name" />
+      </div>
+
+      <div class="checkbox-row">
+        <input type="checkbox" id="smokeTestCheck" checked />
+        <label for="smokeTestCheck">Run smoke test after import</label>
+      </div>
+      <button id="importBtn">Import</button>
+      <div class="msg" id="importMsg"></div>
+    </section>
+  </div>
+
+<script>
+const PROTECTED = new Set(['exec_skill', 'filesystem_skill', 'browser_skill', 'web_fetch_skill']);
+let pendingFile = null;
+
+// --- Helpers ---
+function getToken() { return localStorage.getItem('secureclaw_api_token') || ''; }
+function headers(json = true) {
+  const h = {};
+  const t = getToken();
+  if (t) h['x-api-token'] = t;
+  if (json) h['Content-Type'] = 'application/json';
+  return h;
+}
+
+function shortDate(iso) {
+  if (!iso) return '--';
+  const d = new Date(iso);
+  return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function setMsg(id, text, ok) {
+  const el = document.getElementById(id);
+  el.textContent = text;
+  el.className = 'msg ' + (ok ? 'ok' : 'err');
+}
+
+// --- Load packages ---
+async function loadPackages() {
+  try {
+    const r = await fetch('/api/hub/packages', { headers: headers(false) });
+    const j = await r.json();
+    const pkgs = j.packages || [];
+    const table = document.getElementById('pkgTable');
+    const empty = document.getElementById('pkgEmpty');
+    const body = document.getElementById('pkgBody');
+
+    if (pkgs.length === 0) {
+      table.style.display = 'none';
+      empty.style.display = 'block';
+      return;
+    }
+
+    table.style.display = 'table';
+    empty.style.display = 'none';
+    body.innerHTML = pkgs.map(p => `
+      <tr>
+        <td class="pkg-name">${esc(p.name)}</td>
+        <td><span class="lang-tag ${p.language}">${p.language}</span></td>
+        <td>${esc(p.version)}</td>
+        <td>${esc(p.author)}</td>
+        <td>${shortDate(p.exportedAt)}</td>
+        <td>
+          <button class="action-btn" title="Download" onclick="downloadPkg('${esc(p.name)}')">&#x2B07;</button>
+          <button class="action-btn del" title="Delete" onclick="deletePkg('${esc(p.name)}')">&#x2715;</button>
+        </td>
+      </tr>
+    `).join('');
+  } catch {}
+}
+
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+
+// --- Load skills for export dropdown ---
+async function loadSkillsForExport() {
+  try {
+    const r = await fetch('/api/skills', { headers: headers(false) });
+    const j = await r.json();
+    const sel = document.getElementById('exportSkill');
+    const exportable = (j.skills || []).filter(s => !PROTECTED.has(s.name));
+    if (exportable.length === 0) {
+      sel.innerHTML = '<option value="">No exportable skills</option>';
+      return;
+    }
+    sel.innerHTML = exportable.map(s => `<option value="${esc(s.name)}">${esc(s.name)}</option>`).join('');
+  } catch {}
+}
+
+// --- Export ---
+document.getElementById('exportBtn').addEventListener('click', async () => {
+  const name = document.getElementById('exportSkill').value;
+  if (!name) return setMsg('exportMsg', 'Select a skill to export', false);
+
+  const version = document.getElementById('exportVersion').value.trim() || '1.0.0';
+  const author = document.getElementById('exportAuthor').value.trim() || 'anonymous';
+
+  setMsg('exportMsg', 'Exporting...', true);
+  document.getElementById('exportBtn').disabled = true;
+
+  try {
+    const r = await fetch('/api/hub/export', {
+      method: 'POST', headers: headers(),
+      body: JSON.stringify({ name, version, author })
+    });
+    const j = await r.json();
+    if (j.ok) {
+      setMsg('exportMsg', `Exported ${name} v${version}`, true);
+      loadPackages();
+    } else {
+      setMsg('exportMsg', j.error || 'Export failed', false);
+    }
+  } catch (e) {
+    setMsg('exportMsg', e.message, false);
+  }
+  document.getElementById('exportBtn').disabled = false;
+});
+
+// --- Download ---
+async function downloadPkg(name) {
+  try {
+    const r = await fetch(`/api/hub/packages/${encodeURIComponent(name)}`, { headers: headers(false) });
+    const pkg = await r.json();
+    const blob = new Blob([JSON.stringify(pkg, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${name}-${pkg.version || '1.0.0'}.claw`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  } catch {}
+}
+
+// --- Delete package ---
+async function deletePkg(name) {
+  if (!confirm(`Delete package "${name}" from hub?`)) return;
+  try {
+    await fetch(`/api/hub/packages/${encodeURIComponent(name)}`, { method: 'DELETE', headers: headers(false) });
+    loadPackages();
+  } catch {}
+}
+
+// --- Import tabs ---
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+  });
+});
+
+// --- File upload ---
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', (e) => {
+  e.preventDefault();
+  dropZone.classList.remove('dragover');
+  const file = e.dataTransfer.files[0];
+  if (file) handleFile(file);
+});
+fileInput.addEventListener('change', () => { if (fileInput.files[0]) handleFile(fileInput.files[0]); });
+
+function handleFile(file) {
+  document.getElementById('fileName').textContent = file.name;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      pendingFile = JSON.parse(e.target.result);
+      setMsg('importMsg', `Loaded: ${pendingFile.name || file.name}`, true);
+    } catch {
+      setMsg('importMsg', 'Invalid JSON file', false);
+      pendingFile = null;
+    }
+  };
+  reader.readAsText(file);
+}
+
+// --- Import ---
+document.getElementById('importBtn').addEventListener('click', async () => {
+  const activeTab = document.querySelector('.tab-btn.active').dataset.tab;
+  const smokeTest = document.getElementById('smokeTestCheck').checked;
+  const btn = document.getElementById('importBtn');
+
+  btn.disabled = true;
+  setMsg('importMsg', 'Importing...', true);
+
+  try {
+    let r;
+    if (activeTab === 'file') {
+      if (!pendingFile) { setMsg('importMsg', 'No file loaded', false); btn.disabled = false; return; }
+      r = await fetch(`/api/hub/import?smokeTest=${smokeTest}`, {
+        method: 'POST', headers: headers(),
+        body: JSON.stringify(pendingFile)
+      });
+    } else {
+      const url = document.getElementById('importUrl').value.trim();
+      if (!url) { setMsg('importMsg', 'Enter a URL', false); btn.disabled = false; return; }
+      r = await fetch('/api/hub/import-url', {
+        method: 'POST', headers: headers(),
+        body: JSON.stringify({ url, smokeTest })
+      });
+    }
+
+    const j = await r.json();
+    if (j.ok) {
+      setMsg('importMsg', 'Skill imported and installed successfully', true);
+      pendingFile = null;
+      document.getElementById('fileName').textContent = '';
+      loadSkillsForExport();
+    } else {
+      setMsg('importMsg', j.error || 'Import failed', false);
+    }
+  } catch (e) {
+    setMsg('importMsg', e.message, false);
+  }
+  btn.disabled = false;
+});
+
+// --- Provider badge ---
+async function fetchProvider() {
+  try {
+    const r = await fetch('/health');
+    const j = await r.json();
+    const tag = document.getElementById('activeProvider');
+    const name = j.provider || '';
+    tag.textContent = name;
+    tag.className = 'provider-badge' + (name === 'ollama' ? ' ollama' : name === 'anthropic' ? ' anthropic' : '');
+  } catch {}
+}
+
+// --- Persist author ---
+const authorInput = document.getElementById('exportAuthor');
+authorInput.value = localStorage.getItem('clawhub_author') || '';
+authorInput.addEventListener('input', () => localStorage.setItem('clawhub_author', authorInput.value));
+
+// --- Init ---
+fetchProvider();
+loadPackages();
+loadSkillsForExport();
+</script>
+</body>
+</html>

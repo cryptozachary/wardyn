@@ -1,0 +1,1 @@
+Retrieves content from English Wikipedia by exact page title or search term. Returns full page content or search results with titles, snippets, and URLs.
