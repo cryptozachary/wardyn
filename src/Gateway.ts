@@ -43,7 +43,12 @@ const API_TOKEN = process.env.API_TOKEN;
 let cachedKeys: Record<string, string> | null = null;
 function getKeys(): Record<string, string> {
   if (cachedKeys) return cachedKeys;
-  cachedKeys = loadKeys(process.env.KEY_PASSPHRASE ?? "");
+  try {
+    cachedKeys = loadKeys(process.env.KEY_PASSPHRASE ?? "");
+  } catch {
+    console.error("[vault] Failed to decrypt providers.enc — check KEY_PASSPHRASE in .env");
+    cachedKeys = {};
+  }
   return cachedKeys;
 }
 
