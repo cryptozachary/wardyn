@@ -15,9 +15,12 @@ dist/
 .env.*
 config/providers.enc
 config/skill-secrets.json
+config/channels.json
+config/provider.json
 
 # Logs
-logs/*.log
+logs/
+
 .claude
 # OS / editor
 .DS_Store
