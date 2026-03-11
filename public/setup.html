@@ -147,7 +147,7 @@
 
     <section>
       <h2>Skill Secrets</h2>
-      <p style="color:#64748b; font-size:12px; margin-bottom:12px;">Store API keys and tokens that skills need at runtime. Secrets are saved to <code style="color:#60a5fa">config/skill-secrets.json</code> and never sent to the LLM.</p>
+      <p style="color:#64748b; font-size:12px; margin-bottom:12px;">Skill secrets are stored in the encrypted vault alongside provider keys. Never sent to the LLM.</p>
       <div id="secretsList"></div>
       <div style="margin-top:12px; border-top:1px solid #1e2d4a; padding-top:12px;">
         <label>Add / Update Secret</label>
@@ -156,7 +156,9 @@
           <input id="secretKey" placeholder="key name (e.g. TAAPI_API_KEY)" />
         </div>
         <input id="secretValue" type="password" placeholder="secret value" style="margin-top:6px;" />
-        <button id="saveSecretBtn" class="btn-secondary" style="margin-top:8px;">Save Secret</button>
+        <label>Vault Passphrase</label>
+        <input id="secretPassphrase" type="password" placeholder="same passphrase used for provider keys" />
+        <button id="saveSecretBtn" class="btn-secondary" style="margin-top:8px;">Encrypt & Save Secret</button>
         <p class="msg" id="secretMsg"></p>
       </div>
     </section>
@@ -549,13 +551,23 @@ async function loadSecrets() {
 
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 
+function getSecretPassphrase() {
+  return document.getElementById('secretPassphrase').value.trim();
+}
+
 document.getElementById('saveSecretBtn').onclick = async () => {
   const skill = document.getElementById('secretSkill').value.trim();
   const key = document.getElementById('secretKey').value.trim();
   const value = document.getElementById('secretValue').value;
+  const passphrase = getSecretPassphrase();
   const msg = document.getElementById('secretMsg');
   if (!skill || !key || !value) {
     msg.textContent = 'Skill name, key name, and value are all required.';
+    msg.className = 'msg err';
+    return;
+  }
+  if (!passphrase) {
+    msg.textContent = 'Vault passphrase is required to encrypt the secret.';
     msg.className = 'msg err';
     return;
   }
@@ -563,11 +575,11 @@ document.getElementById('saveSecretBtn').onclick = async () => {
     const r = await fetch('/api/skill-secrets', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ skill, key, value })
+      body: JSON.stringify({ skill, key, value, passphrase })
     });
     const j = await r.json();
     if (j.ok) {
-      msg.textContent = `Saved ${key} for ${skill}`;
+      msg.textContent = `Encrypted & saved ${key} for ${skill}`;
       msg.className = 'msg ok';
       document.getElementById('secretValue').value = '';
       loadSecrets();
@@ -582,12 +594,14 @@ document.getElementById('saveSecretBtn').onclick = async () => {
 };
 
 async function deleteSecret(skill, key) {
+  const passphrase = getSecretPassphrase();
+  if (!passphrase) { alert('Enter the vault passphrase first to delete secrets.'); return; }
   if (!confirm(`Delete secret "${key}" for "${skill}"?`)) return;
   try {
     await fetch('/api/skill-secrets', {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ skill, key })
+      body: JSON.stringify({ skill, key, passphrase })
     });
     loadSecrets();
   } catch {}

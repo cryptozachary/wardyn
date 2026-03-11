@@ -18,7 +18,7 @@ import { buildSkill } from "./builder/builderAgent.js";
 import { deleteSkill, isProtected } from "./builder/skillWriter.js";
 import { auditLogger } from "./security/auditLog.js";
 import { exportSkill, importSkill, importFromUrl, listPackages, getPackage, deletePackage } from "./hub/hubManager.js";
-import { getMaskedSecrets, setSkillSecret, deleteSkillSecret } from "./security/skillSecrets.js";
+import { getMaskedSecrets, setSkillSecret, deleteSkillSecret, initSkillSecrets, migrateLegacySecrets } from "./security/skillSecrets.js";
 import { createServer } from "http";
 import dotenv from "dotenv";
 dotenv.config();
@@ -317,21 +317,32 @@ app.get("/api/skill-secrets", requireAuth, (_req, res) => {
 });
 
 app.post("/api/skill-secrets", requireAuth, (req, res) => {
-  const { skill, key, value } = req.body || {};
+  const { skill, key, value, passphrase } = req.body || {};
   if (!skill || !key || typeof value !== "string") {
     return res.status(400).json({ ok: false, error: "skill, key, and value are required" });
   }
-  setSkillSecret(skill, key, value);
-  res.json({ ok: true });
+  if (!passphrase && !process.env.KEY_PASSPHRASE) {
+    return res.status(400).json({ ok: false, error: "passphrase is required (vault is encrypted)" });
+  }
+  try {
+    setSkillSecret(skill, key, value, passphrase);
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
 });
 
 app.delete("/api/skill-secrets", requireAuth, (req, res) => {
-  const { skill, key } = req.body || {};
+  const { skill, key, passphrase } = req.body || {};
   if (!skill || !key) {
     return res.status(400).json({ ok: false, error: "skill and key are required" });
   }
-  deleteSkillSecret(skill, key);
-  res.json({ ok: true });
+  try {
+    deleteSkillSecret(skill, key, passphrase);
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
 });
 
 app.post('/webhook/telegram', rateLimit, async (req, res) => {
@@ -507,6 +518,10 @@ if (heartbeatJobs.length > 0) {
 
 // Start Discord gateway bot
 startDiscordBot(skills, () => getProviderKey());
+
+// Initialize encrypted skill secrets cache + migrate legacy plaintext if present
+migrateLegacySecrets();
+initSkillSecrets();
 
 // Clean expired sessions every hour
 setInterval(() => cleanExpiredSessions(), 3_600_000).unref();
