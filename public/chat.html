@@ -40,6 +40,16 @@
     .msg.error { align-self: center; background: #7f1d1d30; color: #fca5a5; font-size: 12px; border: 1px solid #7f1d1d; }
     .msg.thinking { align-self: flex-start; background: none; color: #475569; font-size: 12px; font-style: italic; padding: 2px 8px; }
 
+    /* Inline images in chat */
+    .msg img.chat-img { max-width: 100%; max-height: 400px; border-radius: 8px; margin-top: 8px; cursor: pointer; display: block; }
+    .msg img.chat-img:hover { opacity: 0.9; }
+    .msg .img-caption { font-size: 11px; color: #64748b; margin-top: 4px; }
+
+    /* Lightbox overlay */
+    .lightbox { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 1000; justify-content: center; align-items: center; cursor: zoom-out; }
+    .lightbox.active { display: flex; }
+    .lightbox img { max-width: 95%; max-height: 95%; border-radius: 8px; }
+
     /* Input */
     .input-area { display: flex; gap: 8px; padding: 12px 16px; background: #141d35; border-top: 1px solid #1e2d4a; flex-shrink: 0; }
     .input-area textarea { flex: 1; padding: 10px 14px; border-radius: 8px; border: 1px solid #1e2d4a; background: #1e293b; color: #e2e8f0; font-size: 14px; font-family: inherit; resize: none; min-height: 42px; max-height: 120px; }
@@ -79,6 +89,10 @@
   <div class="input-area">
     <textarea id="input" placeholder="Type a message..." rows="1"></textarea>
     <button class="send-btn" id="sendBtn">Send</button>
+  </div>
+
+  <div class="lightbox" id="lightbox" onclick="this.classList.remove('active')">
+    <img id="lightboxImg" src="" alt="Full size" />
   </div>
 
 <script>
@@ -127,7 +141,40 @@ function updateSessionLabel() {
 function addMsg(text, cls) {
   const div = document.createElement('div');
   div.className = 'msg ' + cls;
-  div.textContent = text;
+
+  // Detect image paths in the text and render them inline
+  const imgPattern = /(?:\/output\/[^\s"']+\.(?:png|jpg|jpeg|gif|webp))/gi;
+  const images = text.match(imgPattern);
+
+  if (images && images.length > 0) {
+    // Render text with images embedded
+    const textWithoutPaths = text.replace(imgPattern, '').trim();
+    if (textWithoutPaths) {
+      const textSpan = document.createElement('span');
+      textSpan.textContent = textWithoutPaths;
+      div.appendChild(textSpan);
+    }
+    for (const src of images) {
+      const img = document.createElement('img');
+      img.className = 'chat-img';
+      img.src = src;
+      img.alt = 'Generated image';
+      img.loading = 'lazy';
+      img.onclick = (e) => {
+        e.stopPropagation();
+        document.getElementById('lightboxImg').src = src;
+        document.getElementById('lightbox').classList.add('active');
+      };
+      div.appendChild(img);
+      const caption = document.createElement('div');
+      caption.className = 'img-caption';
+      caption.textContent = src.split('/').pop();
+      div.appendChild(caption);
+    }
+  } else {
+    div.textContent = text;
+  }
+
   msgContainer.appendChild(div);
   msgContainer.scrollTop = msgContainer.scrollHeight;
   return div;
@@ -202,7 +249,24 @@ function connectWs() {
         addMsg(`Tool: ${data.name}(${JSON.stringify(data.args)})`, 'tool');
         break;
       case 'tool_result':
-        addMsg(data.error ? `Error: ${data.error}` : `Result: ${data.output.slice(0, 500)}`, 'tool');
+        if (data.error) {
+          addMsg(`Error: ${data.error}`, 'tool');
+        } else {
+          const output = data.output || '';
+          // Try to extract image path from JSON tool output
+          let imgPath = null;
+          try {
+            const parsed = JSON.parse(output);
+            if (parsed.path && /\.(png|jpg|jpeg|gif|webp)$/i.test(parsed.path)) {
+              imgPath = parsed.path;
+            }
+          } catch {}
+          if (imgPath) {
+            addMsg(`Result: ${imgPath}`, 'tool');
+          } else {
+            addMsg(`Result: ${output.slice(0, 500)}`, 'tool');
+          }
+        }
         break;
       case 'final':
         addMsg(data.text ?? '(no response)', 'assistant');
@@ -266,7 +330,18 @@ async function sendHttp(text) {
 
     if (data.toolResults?.length) {
       for (const tr of data.toolResults) {
-        addMsg(tr.error ? `${tr.name}: Error - ${tr.error}` : `${tr.name}: ${tr.output.slice(0, 500)}`, 'tool');
+        if (tr.error) {
+          addMsg(`${tr.name}: Error - ${tr.error}`, 'tool');
+        } else {
+          let imgPath = null;
+          try {
+            const parsed = JSON.parse(tr.output);
+            if (parsed.path && /\.(png|jpg|jpeg|gif|webp)$/i.test(parsed.path)) {
+              imgPath = parsed.path;
+            }
+          } catch {}
+          addMsg(imgPath ? `${tr.name}: ${imgPath}` : `${tr.name}: ${tr.output.slice(0, 500)}`, 'tool');
+        }
       }
     }
 
