@@ -6,6 +6,26 @@ import { runAgentLoop } from "./agentLoop.js";
 import { callLLM } from "../llm/router.js";
 import { scanContext, formatSnapshot } from "./contextScanner.js";
 
+/* ────────── cron_skill integration ────────── */
+
+let checkDueJobsFn: (() => Promise<any[]>) | null = null;
+
+async function loadCronChecker(): Promise<void> {
+  if (checkDueJobsFn) return;
+  try {
+    const cronSkillPath = path.join(process.cwd(), "dist", "skills", "cron_skill", "index.js");
+    const srcPath = path.join(process.cwd(), "skills", "cron_skill", "index.js");
+    const mod = existsSync(cronSkillPath)
+      ? await import(cronSkillPath)
+      : existsSync(srcPath)
+        ? await import(srcPath)
+        : null;
+    if (mod?.checkDueJobs) checkDueJobsFn = mod.checkDueJobs;
+  } catch {
+    // cron_skill not available — no-op
+  }
+}
+
 export interface HeartbeatJob {
   name: string;
   cron: string; // simplified: "every <N>m" or "every <N>h" or "every <N>s"
@@ -146,6 +166,37 @@ export function startHeartbeat(
     timer.unref();
     timers.push(timer);
   }
+
+  // Fix #2: Wire cron_skill into heartbeat — check every 60s for due cron jobs
+  const cronTimer = setInterval(async () => {
+    try {
+      await loadCronChecker();
+      if (!checkDueJobsFn) return;
+
+      const dueJobs = await checkDueJobsFn();
+      for (const dueJob of dueJobs) {
+        if (dueJob.taskType === "skill_call" && dueJob.skillName) {
+          const prompt = `Run the ${dueJob.skillName} skill with these arguments: ${JSON.stringify(dueJob.skillArgs ?? {})}`;
+          const msg: Message = {
+            id: `cron-${randomUUID()}`,
+            channel: "heartbeat",
+            userId: "system",
+            text: prompt,
+            ts: Date.now(),
+          };
+          const result = await runAgentLoop(msg, skills, getApiKey());
+          console.log(`Cron "${dueJob.name}" (skill_call): ${result.final?.slice(0, 100) ?? "(no output)"}`);
+        } else if (dueJob.taskType === "message" && dueJob.message) {
+          console.log(`Cron "${dueJob.name}" (message): ${dueJob.message}`);
+          onResult?.({ name: dueJob.name, cron: "cron_skill", prompt: dueJob.message }, { final: dueJob.message });
+        }
+      }
+    } catch (err: any) {
+      console.error(`Cron check failed: ${err.message}`);
+    }
+  }, 60_000);
+  cronTimer.unref();
+  timers.push(cronTimer);
 
   return () => {
     for (const t of timers) clearInterval(t);
