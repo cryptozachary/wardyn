@@ -1,5 +1,6 @@
 import { readFileSync, existsSync } from "fs";
 import path from "path";
+import { pathToFileURL } from "url";
 import { randomUUID } from "crypto";
 import { Message, SkillMeta } from "../types.js";
 import { runAgentLoop } from "./agentLoop.js";
@@ -15,14 +16,13 @@ async function loadCronChecker(): Promise<void> {
   try {
     const cronSkillPath = path.join(process.cwd(), "dist", "skills", "cron_skill", "index.js");
     const srcPath = path.join(process.cwd(), "skills", "cron_skill", "index.js");
-    const mod = existsSync(cronSkillPath)
-      ? await import(cronSkillPath)
-      : existsSync(srcPath)
-        ? await import(srcPath)
-        : null;
+    const target = existsSync(cronSkillPath) ? cronSkillPath : existsSync(srcPath) ? srcPath : null;
+    if (!target) return;
+    // Use file:// URL for cross-platform ESM dynamic import compatibility
+    const mod = await import(pathToFileURL(target).href);
     if (mod?.checkDueJobs) checkDueJobsFn = mod.checkDueJobs;
-  } catch {
-    // cron_skill not available — no-op
+  } catch (err) {
+    console.warn(`Failed to load cron_skill: ${(err as Error).message}`);
   }
 }
 
@@ -185,7 +185,7 @@ export function startHeartbeat(
             ts: Date.now(),
           };
           const result = await runAgentLoop(msg, skills, getApiKey());
-          console.log(`Cron "${dueJob.name}" (skill_call): ${result.final?.slice(0, 100) ?? "(no output)"}`);
+          console.log(`Cron "${dueJob.name}" (skill_call): ${result.final ?? "(no output)"}`);
         } else if (dueJob.taskType === "message" && dueJob.message) {
           console.log(`Cron "${dueJob.name}" (message): ${dueJob.message}`);
           onResult?.({ name: dueJob.name, cron: "cron_skill", prompt: dueJob.message }, { final: dueJob.message });
@@ -220,7 +220,7 @@ async function executeFixedJob(
 
   const result = await runAgentLoop(msg, skills, getApiKey());
   onResult?.(job, result);
-  console.log(`Heartbeat "${job.name}" completed: ${result.final?.slice(0, 100) ?? "(no output)"}`);
+  console.log(`Heartbeat "${job.name}" completed: ${result.final ?? "(no output)"}`);
 }
 
 async function executeSmartJob(
@@ -252,5 +252,5 @@ async function executeSmartJob(
     sessionId: `heartbeat-${job.name}`
   });
   onResult?.(job, { ...result, triageReason: triage.reason });
-  console.log(`Heartbeat "${job.name}" acted: ${result.final?.slice(0, 100) ?? "(no output)"}`);
+  console.log(`Heartbeat "${job.name}" acted: ${result.final ?? "(no output)"}`);
 }

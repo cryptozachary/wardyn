@@ -1,5 +1,6 @@
-import { promises as fs } from "fs";
+import { promises as fs, existsSync } from "fs";
 import path from "path";
+import { pathToFileURL } from "url";
 import crypto from "crypto";
 
 export const parameters = {
@@ -50,6 +51,34 @@ const DEFAULT_CRYPTO_WATCHLIST = [
   "LINK/USDT", "UNI/USDT", "ATOM/USDT", "LTC/USDT", "NEAR/USDT",
   "APT/USDT", "OP/USDT", "ARB/USDT", "FIL/USDT", "INJ/USDT",
 ];
+
+// CoinGecko ID / common name -> TAAPI symbol mapping (auto-normalize)
+const COINGECKO_TO_SYMBOL: Record<string, string> = {
+  bitcoin: "BTC/USDT", ethereum: "ETH/USDT", solana: "SOL/USDT",
+  binancecoin: "BNB/USDT", ripple: "XRP/USDT", cardano: "ADA/USDT",
+  "avalanche-2": "AVAX/USDT", dogecoin: "DOGE/USDT", polkadot: "DOT/USDT",
+  "matic-network": "MATIC/USDT", chainlink: "LINK/USDT", uniswap: "UNI/USDT",
+  cosmos: "ATOM/USDT", litecoin: "LTC/USDT", near: "NEAR/USDT",
+  aptos: "APT/USDT", optimism: "OP/USDT", arbitrum: "ARB/USDT",
+  filecoin: "FIL/USDT", "injective-protocol": "INJ/USDT",
+  sui: "SUI/USDT", pepe: "PEPE/USDT", "shiba-inu": "SHIB/USDT",
+  aave: "AAVE/USDT", maker: "MKR/USDT", tether: "BTC/USDT", // tether is not tradable as base; fall back to BTC
+  "usd-coin": "BTC/USDT", // USDC is not tradable as base pair on most exchanges
+};
+
+/** Normalize symbol to TAAPI-compatible format (e.g. "BTC/USDT") */
+function normalizeSymbol(raw: string): string {
+  const s = raw.trim();
+  // Already in pair format (contains /)
+  if (s.includes("/")) return s.toUpperCase();
+  // CoinGecko ID (lowercase, may contain hyphens)
+  const mapped = COINGECKO_TO_SYMBOL[s.toLowerCase()];
+  if (mapped) return mapped;
+  // Bare ticker (e.g. "BTC") -> append /USDT
+  if (/^[A-Z]{2,10}$/i.test(s)) return s.toUpperCase() + "/USDT";
+  // Unknown format -> try uppercase + /USDT
+  return s.toUpperCase() + "/USDT";
+}
 
 /* ────────────────────── built-in strategies ────────────────────── */
 
@@ -178,23 +207,35 @@ let taapiExecute: ((args: any) => Promise<string>) | null = null;
 
 async function loadTaapi(): Promise<void> {
   if (taapiExecute) return;
+
+  // Use import.meta.url to resolve relative to this file's location (works in both src/ and dist/)
+  const thisDir = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/i, "$1"));
+  const siblingPath = path.join(thisDir, "..", "taapi_io_price_retriever_skill", "index.js");
+
   const candidates = [
+    siblingPath,
     path.join(process.cwd(), "dist", "skills", "taapi_io_price_retriever_skill", "index.js"),
     path.join(process.cwd(), "skills", "taapi_io_price_retriever_skill", "index.js"),
   ];
+
+  const errors: string[] = [];
   for (const p of candidates) {
     try {
-      const { existsSync } = require("fs");
       if (existsSync(p)) {
-        const mod = await import(p);
+        const mod = await import(pathToFileURL(p).href);
         if (mod.execute) {
           taapiExecute = mod.execute;
           return;
         }
       }
-    } catch { /* continue */ }
+    } catch (err: any) {
+      errors.push(`${p}: ${err.message}`);
+    }
   }
-  throw new Error("taapi_io_price_retriever_skill not found. The market scanner depends on it.");
+  throw new Error(
+    `taapi_io_price_retriever_skill not found. Tried:\n${candidates.map((c) => `  - ${c} (exists: ${existsSync(c)})`).join("\n")}` +
+    (errors.length > 0 ? `\nImport errors:\n${errors.map((e) => `  - ${e}`).join("\n")}` : ""),
+  );
 }
 
 async function fetchBulkIndicators(
@@ -417,10 +458,10 @@ async function handleScan(args: any, start: number): Promise<string> {
   const maxResults = Math.min(Math.max(1, Number(args.maxResults) || 20), 50);
   const strategyName = (args.strategy || "full_analysis").toLowerCase().trim();
 
-  // Resolve symbols
+  // Resolve symbols (normalize CoinGecko IDs, bare tickers, etc. to TAAPI format)
   let symbols: string[];
   if (args.symbols && Array.isArray(args.symbols) && args.symbols.length > 0) {
-    symbols = args.symbols.map((s: string) => s.toUpperCase().trim());
+    symbols = args.symbols.map((s: string) => normalizeSymbol(s));
   } else {
     const store = await loadWatchlists();
     const wlName = args.watchlistName || "default";
@@ -543,6 +584,11 @@ async function handleScan(args: any, start: number): Promise<string> {
       score: Math.round(m.score * 100) / 100,
       indicators: m.data,
     })),
+    ...(errors > 0 && {
+      errorDetails: results
+        .filter((r) => r.error)
+        .map((r) => ({ symbol: r.symbol, error: r.error })),
+    }),
     elapsedMs: Date.now() - start,
   });
 }

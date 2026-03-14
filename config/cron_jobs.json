@@ -1,0 +1,18 @@
+{
+  "jobs": [
+    {
+      "id": "8bcf51e8",
+      "name": "Check Profitable Trades for Top 10 Crypto Coins",
+      "schedule": "* * * * *",
+      "timezone": "UTC",
+      "taskType": "skill_call",
+      "skillName": "market_scanner_skill",
+      "message": "Check profitable trades for top 10 cryptocurrencies.",
+      "active": true,
+      "createdAt": "2026-03-14T06:04:58.944Z",
+      "lastRun": "2026-03-14T06:58:55.725Z",
+      "nextRun": "2026-03-14T06:59:00.000Z",
+      "runCount": 29
+    }
+  ]
+}
