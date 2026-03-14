@@ -29,7 +29,14 @@ export const parameters = {
     // Multi-target TP
     targets: {
       type: "array",
-      items: { type: "object" },
+      items: {
+        type: "object",
+        properties: {
+          price: { type: "number", description: "Target price" },
+          percent: { type: "number", description: "Percentage of position to close at this target" },
+        },
+        required: ["price", "percent"],
+      },
       description: "Take profit targets: [{ price: 70000, percent: 50 }, { price: 75000, percent: 50 }]",
     },
 
@@ -38,14 +45,19 @@ export const parameters = {
 
     // Compound
     startingCapital: { type: "number", description: "Starting capital for compound projection" },
-    returnPercent: { type: "number", description: "Expected return per trade as %" },
+    returnPercent: { type: "number", description: "Expected return per trade as % (can be negative for drawdown modeling)" },
     trades: { type: "number", description: "Number of trades to project" },
     reinvestPercent: { type: "number", description: "Percent of profits to reinvest (default: 100)" },
+
+    // Stop loss extras
+    quantity: { type: "number", description: "Position size for fixed-risk stop loss calculation" },
   },
   required: ["action"],
 };
 
-/* ────────────────────── execute ────────────────────── */
+/* ------------------------------------------------------------------ */
+/*  Execute                                                           */
+/* ------------------------------------------------------------------ */
 
 export async function execute(args: any): Promise<string> {
   const start = Date.now();
@@ -69,14 +81,19 @@ export async function execute(args: any): Promise<string> {
   }
 }
 
-/* ────────────────────── calculations ────────────────────── */
+/* ------------------------------------------------------------------ */
+/*  position_size (fix #1: correct leverage math)                     */
+/* ------------------------------------------------------------------ */
 
 function positionSize(args: any, start: number): string {
-  const { accountSize, riskPercent, entryPrice, stopLoss, leverage = 1, feePercent = 0.1 } = args;
+  const { accountSize, entryPrice, stopLoss } = args;
+  const riskPercent = requirePositiveNum(args.riskPercent, "riskPercent");
+  const leverage = requireInRange(args.leverage ?? 1, "leverage", 1, 125);
+  const feePercent = requireNonNegative(args.feePercent ?? 0.1, "feePercent");
   const side = args.side || "long";
 
-  requirePositive({ accountSize, riskPercent, entryPrice, stopLoss });
-  if (leverage < 1 || leverage > 125) throw new Error("leverage must be 1-125");
+  requirePositive({ accountSize, entryPrice, stopLoss });
+  validateSide(side, entryPrice, stopLoss, undefined, "stopLoss");
 
   const riskAmount = accountSize * (riskPercent / 100);
   const stopDistance = Math.abs(entryPrice - stopLoss);
@@ -84,15 +101,23 @@ function positionSize(args: any, start: number): string {
 
   const stopPercent = (stopDistance / entryPrice) * 100;
   const feePerTrade = feePercent / 100;
-  const totalFeePercent = feePerTrade * 2; // entry + exit
+  const roundTripFeePercent = feePerTrade * 2;
 
-  // Position size accounting for fees
-  const effectiveStopPercent = stopPercent + (totalFeePercent * 100);
-  const positionValue = riskAmount / (effectiveStopPercent / 100);
-  const quantity = positionValue / entryPrice;
-  const leveragedQuantity = quantity * leverage;
-  const leveragedValue = leveragedQuantity * entryPrice;
-  const marginRequired = leveragedValue / leverage;
+  // With leverage: fees apply to the leveraged notional, risk applies to margin
+  // Effective risk per unit = (stopPercent/100) + (roundTripFeePercent * leverage)
+  // But risk is measured against margin (notional / leverage)
+  // riskAmount = margin * (stopPercent/100 * leverage + roundTripFeePercent * leverage)
+  // riskAmount = margin * leverage * (stopPercent/100 + roundTripFeePercent)
+  // margin = riskAmount / (leverage * (stopPercent/100 + roundTripFeePercent))
+  const effectiveRiskRate = (stopPercent / 100) + roundTripFeePercent;
+  const marginRequired = riskAmount / (leverage * effectiveRiskRate);
+  const leveragedValue = marginRequired * leverage;
+  const quantity = leveragedValue / entryPrice;
+  const estimatedFees = leveragedValue * roundTripFeePercent;
+
+  const warnings: string[] = [];
+  if (marginRequired > accountSize) warnings.push("Margin required exceeds account size");
+  if (estimatedFees > riskAmount * 0.3) warnings.push("Fees consume >30% of risk budget");
 
   return JSON.stringify({
     status: "ok",
@@ -106,22 +131,26 @@ function positionSize(args: any, start: number): string {
     stopDistance: r(stopDistance),
     stopPercent: r(stopPercent),
     quantity: r(quantity, 6),
-    positionValue: r(positionValue),
+    positionValue: r(leveragedValue),
     leverage,
-    leveragedQuantity: r(leveragedQuantity, 6),
-    leveragedValue: r(leveragedValue),
     marginRequired: r(marginRequired),
-    estimatedFees: r(leveragedValue * totalFeePercent),
+    estimatedFees: r(estimatedFees),
+    ...(warnings.length > 0 && { warnings }),
     elapsedMs: Date.now() - start,
   });
 }
 
+/* ------------------------------------------------------------------ */
+/*  risk_reward (fix #2: side-aware validation + #5: guardrails)      */
+/* ------------------------------------------------------------------ */
+
 function riskReward(args: any, start: number): string {
   const { entryPrice, stopLoss, takeProfit } = args;
   const side = args.side || "long";
-  const feePercent = args.feePercent || 0.1;
+  const feePercent = requireNonNegative(args.feePercent ?? 0.1, "feePercent");
 
   requirePositive({ entryPrice, stopLoss, takeProfit });
+  validateSide(side, entryPrice, stopLoss, takeProfit, "stopLoss");
 
   const risk = Math.abs(entryPrice - stopLoss);
   const reward = Math.abs(takeProfit - entryPrice);
@@ -130,21 +159,25 @@ function riskReward(args: any, start: number): string {
   const ratio = reward / risk;
   const riskPercent = (risk / entryPrice) * 100;
   const rewardPercent = (reward / entryPrice) * 100;
-  const totalFees = (feePercent / 100) * 2 * 100; // in percent
-  const netRewardPercent = rewardPercent - totalFees;
-  const netRiskPercent = riskPercent + totalFees;
-  const netRatio = netRewardPercent / netRiskPercent;
+  const totalFeePct = (feePercent / 100) * 2 * 100; // round-trip in percent
+  const netRewardPercent = rewardPercent - totalFeePct;
+  const netRiskPercent = riskPercent + totalFeePct;
+  const netRatio = netRiskPercent > 0 ? netRewardPercent / netRiskPercent : 0;
 
   // Required win rate to be profitable at this R:R
   const requiredWinRate = 1 / (1 + ratio);
 
   // Grade the trade
   let grade: string;
-  if (ratio >= 3) grade = "A — Excellent";
-  else if (ratio >= 2) grade = "B — Good";
-  else if (ratio >= 1.5) grade = "C — Acceptable";
-  else if (ratio >= 1) grade = "D — Marginal";
-  else grade = "F — Poor (risk > reward)";
+  if (ratio >= 3) grade = "A - Excellent";
+  else if (ratio >= 2) grade = "B - Good";
+  else if (ratio >= 1.5) grade = "C - Acceptable";
+  else if (ratio >= 1) grade = "D - Marginal";
+  else grade = "F - Poor (risk > reward)";
+
+  const warnings: string[] = [];
+  if (netRatio <= 0) warnings.push("Net R:R is negative after fees - this trade loses money even on a win");
+  if (netRewardPercent <= 0) warnings.push("Fees exceed potential reward");
 
   return JSON.stringify({
     status: "ok",
@@ -158,15 +191,20 @@ function riskReward(args: any, start: number): string {
     ratio: r(ratio, 2),
     riskPercent: r(riskPercent),
     rewardPercent: r(rewardPercent),
-    netRatio: r(netRatio, 2),
+    netRatio: r(Math.max(0, netRatio), 2),
     requiredWinRate: r(requiredWinRate * 100, 1),
     grade,
+    ...(warnings.length > 0 && { warnings }),
     elapsedMs: Date.now() - start,
   });
 }
 
+/* ------------------------------------------------------------------ */
+/*  stop_loss (fix #3: validate optional numeric inputs)              */
+/* ------------------------------------------------------------------ */
+
 function stopLossCalc(args: any, start: number): string {
-  const { entryPrice, riskPercent, accountSize, quantity } = args;
+  const { entryPrice } = args;
   const side = args.side || "long";
 
   requirePositive({ entryPrice });
@@ -174,19 +212,23 @@ function stopLossCalc(args: any, start: number): string {
   const results: any = { status: "ok", action: "stop_loss", side, entryPrice };
 
   // Method 1: Percentage-based
-  if (riskPercent) {
-    const slDistance = entryPrice * (riskPercent / 100);
+  if (args.riskPercent !== undefined) {
+    const riskPct = requirePositiveNum(args.riskPercent, "riskPercent");
+    const slDistance = entryPrice * (riskPct / 100);
     results.percentageBased = {
-      riskPercent,
+      riskPercent: riskPct,
       stopLoss: r(side === "long" ? entryPrice - slDistance : entryPrice + slDistance),
       distance: r(slDistance),
     };
   }
 
   // Method 2: Fixed dollar risk
-  if (accountSize && riskPercent && quantity) {
-    const maxRisk = accountSize * (riskPercent / 100);
-    const slDistance = maxRisk / quantity;
+  if (args.accountSize !== undefined && args.riskPercent !== undefined && args.quantity !== undefined) {
+    const accSize = requirePositiveNum(args.accountSize, "accountSize");
+    const riskPct = requirePositiveNum(args.riskPercent, "riskPercent");
+    const qty = requirePositiveNum(args.quantity, "quantity");
+    const maxRisk = accSize * (riskPct / 100);
+    const slDistance = maxRisk / qty;
     results.fixedRisk = {
       maxRiskAmount: r(maxRisk),
       stopLoss: r(side === "long" ? entryPrice - slDistance : entryPrice + slDistance),
@@ -200,12 +242,16 @@ function stopLossCalc(args: any, start: number): string {
     conservative: "1.5x ATR",
     moderate: "2.0x ATR",
     wide: "3.0x ATR",
-    formula: side === "long" ? "SL = entry - (ATR × multiplier)" : "SL = entry + (ATR × multiplier)",
+    formula: side === "long" ? "SL = entry - (ATR x multiplier)" : "SL = entry + (ATR x multiplier)",
   };
 
   results.elapsedMs = Date.now() - start;
   return JSON.stringify(results);
 }
+
+/* ------------------------------------------------------------------ */
+/*  take_profit (fix #2: side-aware + #6: strict targets)             */
+/* ------------------------------------------------------------------ */
 
 function takeProfitCalc(args: any, start: number): string {
   const { entryPrice, stopLoss, targets } = args;
@@ -215,8 +261,10 @@ function takeProfitCalc(args: any, start: number): string {
 
   const results: any = { status: "ok", action: "take_profit", side, entryPrice };
 
-  // R-multiple targets
-  if (stopLoss) {
+  // R-multiple targets (with side-aware SL validation)
+  if (stopLoss !== undefined) {
+    requirePositiveNum(stopLoss, "stopLoss");
+    validateSide(side, entryPrice, stopLoss, undefined, "stopLoss");
     const risk = Math.abs(entryPrice - stopLoss);
     results.rMultipleTargets = [1, 1.5, 2, 3, 5].map((mult) => ({
       rMultiple: mult,
@@ -231,27 +279,51 @@ function takeProfitCalc(args: any, start: number): string {
     price: r(side === "long" ? entryPrice * (1 + pct / 100) : entryPrice * (1 - pct / 100)),
   }));
 
-  // Multi-target analysis
-  if (targets && Array.isArray(targets)) {
+  // Multi-target analysis (fix #6: strict validation)
+  if (targets !== undefined) {
+    if (!Array.isArray(targets) || targets.length === 0) {
+      throw new Error("targets must be a non-empty array of { price: number, percent: number }");
+    }
+
     let totalPercent = 0;
-    results.multiTarget = targets.map((t: any) => {
-      const pct = t.percent || 0;
-      totalPercent += pct;
+    const validated = targets.map((t: any, i: number) => {
+      if (typeof t.price !== "number" || t.price <= 0) {
+        throw new Error(`targets[${i}].price must be a positive number`);
+      }
+      if (typeof t.percent !== "number" || t.percent <= 0 || t.percent > 100) {
+        throw new Error(`targets[${i}].percent must be between 0 and 100`);
+      }
+      // Validate target direction
+      if (side === "long" && t.price <= entryPrice) {
+        throw new Error(`targets[${i}].price (${t.price}) must be above entry (${entryPrice}) for long`);
+      }
+      if (side === "short" && t.price >= entryPrice) {
+        throw new Error(`targets[${i}].price (${t.price}) must be below entry (${entryPrice}) for short`);
+      }
+      totalPercent += t.percent;
       const distance = Math.abs(t.price - entryPrice);
       return {
         price: t.price,
-        closePercent: pct,
+        closePercent: t.percent,
         profitPercent: r((distance / entryPrice) * 100),
       };
     });
-    if (totalPercent !== 100) {
-      results.multiTargetWarning = `Target percentages sum to ${totalPercent}%, should be 100%`;
+
+    results.multiTarget = validated;
+
+    // Tolerance: allow 99-101% for floating point
+    if (totalPercent < 99 || totalPercent > 101) {
+      results.multiTargetWarning = `Target percentages sum to ${r(totalPercent, 1)}%, should be ~100%`;
     }
   }
 
   results.elapsedMs = Date.now() - start;
   return JSON.stringify(results);
 }
+
+/* ------------------------------------------------------------------ */
+/*  kelly                                                             */
+/* ------------------------------------------------------------------ */
 
 function kellyCalc(args: any, start: number): string {
   const { winRate, avgWin, avgLoss, accountSize, kellyFraction = 0.5 } = args;
@@ -278,7 +350,7 @@ function kellyCalc(args: any, start: number): string {
     fractionalKellyPercent: r(fractionalKelly * 100, 2),
     kellyFraction,
     recommendation: fullKelly <= 0
-      ? "Negative edge — do not trade this strategy"
+      ? "Negative edge - do not trade this strategy"
       : `Risk ${r(fractionalKelly * 100, 1)}% of account per trade (${kellyFraction === 0.5 ? "half" : r(kellyFraction * 100)}% Kelly)`,
   };
 
@@ -287,31 +359,41 @@ function kellyCalc(args: any, start: number): string {
   }
 
   // Edge and expected value
-  results.edge = r((winRate * avgWin - q * avgLoss), 2);
-  results.expectedValuePerTrade = r((winRate * avgWin - q * avgLoss), 2);
+  results.edge = r(winRate * avgWin - q * avgLoss, 2);
+  results.expectedValuePerTrade = results.edge;
 
   results.elapsedMs = Date.now() - start;
   return JSON.stringify(results);
 }
 
+/* ------------------------------------------------------------------ */
+/*  breakeven (fix #4: correct leverage logic)                        */
+/* ------------------------------------------------------------------ */
+
 function breakevenCalc(args: any, start: number): string {
-  const { entryPrice, feePercent = 0.1, leverage = 1 } = args;
+  const { entryPrice } = args;
+  const feePercent = requireNonNegative(args.feePercent ?? 0.1, "feePercent");
+  const leverage = requireInRange(args.leverage ?? 1, "leverage", 1, 125);
   const side = args.side || "long";
 
   requirePositive({ entryPrice });
 
-  const totalFeePercent = (feePercent / 100) * 2; // entry + exit
-  const breakevenDistance = entryPrice * totalFeePercent;
+  // Round-trip fee rate (entry + exit)
+  const roundTripFeeRate = (feePercent / 100) * 2;
+
+  // Spot breakeven: price must move by totalFees to cover costs
+  // Fee is charged on leveraged notional, but P&L is also on leveraged notional
+  // So breakeven move % = roundTripFeeRate (same regardless of leverage)
+  // The fee dollar amount scales with leverage, but so does the P&L per price move
+  const breakevenMovePercent = roundTripFeeRate * 100;
+  const breakevenDistance = entryPrice * roundTripFeeRate;
 
   const breakevenPrice = side === "long"
     ? entryPrice + breakevenDistance
     : entryPrice - breakevenDistance;
 
-  // With leverage, the fee impact is amplified
-  const leveragedBreakevenDistance = breakevenDistance / leverage;
-  const leveragedBreakevenPrice = side === "long"
-    ? entryPrice + leveragedBreakevenDistance
-    : entryPrice - leveragedBreakevenDistance;
+  // With leverage: the actual dollar fee is higher
+  const feeDollarsPerUnit = entryPrice * roundTripFeeRate * leverage;
 
   return JSON.stringify({
     status: "ok",
@@ -319,18 +401,22 @@ function breakevenCalc(args: any, start: number): string {
     side,
     entryPrice,
     feePercent,
-    totalFees: r(totalFeePercent * 100, 3),
+    leverage,
+    roundTripFeePercent: r(roundTripFeeRate * 100, 3),
     breakevenPrice: r(breakevenPrice),
     breakevenDistance: r(breakevenDistance),
-    breakevenPercent: r(totalFeePercent * 100, 3),
-    leverage,
+    breakevenMovePercent: r(breakevenMovePercent, 3),
     ...(leverage > 1 && {
-      leveragedBreakevenPrice: r(leveragedBreakevenPrice),
-      leveragedBreakevenPercent: r((totalFeePercent / leverage) * 100, 4),
+      note: `With ${leverage}x leverage, you pay ${r(roundTripFeeRate * leverage * 100, 3)}% of margin in fees, but breakeven price move remains ${r(breakevenMovePercent, 3)}%`,
+      feeAsPercentOfMargin: r(roundTripFeeRate * leverage * 100, 3),
     }),
     elapsedMs: Date.now() - start,
   });
 }
+
+/* ------------------------------------------------------------------ */
+/*  liquidation (fix #5: guardrails)                                  */
+/* ------------------------------------------------------------------ */
 
 function liquidationCalc(args: any, start: number): string {
   const { entryPrice, leverage, maintenanceMargin = 0.005 } = args;
@@ -338,6 +424,7 @@ function liquidationCalc(args: any, start: number): string {
 
   requirePositive({ entryPrice, leverage });
   if (leverage < 1) throw new Error("leverage must be >= 1");
+  requireNonNegative(maintenanceMargin, "maintenanceMargin");
 
   // Liquidation price formula:
   // Long: entryPrice * (1 - 1/leverage + maintenanceMargin)
@@ -348,6 +435,22 @@ function liquidationCalc(args: any, start: number): string {
 
   const distancePercent = Math.abs(entryPrice - liqPrice) / entryPrice * 100;
 
+  // Guardrail: check if SL is provided and compare
+  const warnings: string[] = [];
+  if (distancePercent < 5) warnings.push("Liquidation is very close to entry - high risk");
+  if (liqPrice <= 0 && side === "long") warnings.push("Liquidation price is zero or negative - check leverage/margin inputs");
+
+  // Check if stop loss is beyond liquidation
+  if (args.stopLoss !== undefined) {
+    const sl = args.stopLoss;
+    if (side === "long" && sl <= liqPrice) {
+      warnings.push(`Stop loss (${sl}) is at or beyond liquidation price (${r(liqPrice)}) - stop will never trigger`);
+    }
+    if (side === "short" && sl >= liqPrice) {
+      warnings.push(`Stop loss (${sl}) is at or beyond liquidation price (${r(liqPrice)}) - stop will never trigger`);
+    }
+  }
+
   return JSON.stringify({
     status: "ok",
     action: "liquidation",
@@ -357,35 +460,70 @@ function liquidationCalc(args: any, start: number): string {
     maintenanceMargin: r(maintenanceMargin * 100, 2),
     liquidationPrice: r(liqPrice),
     distanceToLiquidation: r(distancePercent, 2),
-    warning: distancePercent < 5 ? "⚠ Liquidation is very close to entry — high risk" : undefined,
+    ...(warnings.length > 0 && { warnings }),
     elapsedMs: Date.now() - start,
   });
 }
 
+/* ------------------------------------------------------------------ */
+/*  compound (fix #7: negative returns supported)                     */
+/* ------------------------------------------------------------------ */
+
 function compoundCalc(args: any, start: number): string {
   const { startingCapital, returnPercent, trades, reinvestPercent = 100 } = args;
 
-  requirePositive({ startingCapital, returnPercent, trades });
+  requirePositive({ startingCapital });
+  if (typeof returnPercent !== "number") throw new Error("returnPercent is required");
+  if (returnPercent === 0) throw new Error("returnPercent cannot be zero");
+  if (returnPercent < -100) throw new Error("returnPercent cannot be less than -100%");
+  if (typeof trades !== "number" || trades < 1 || !Number.isInteger(trades)) throw new Error("trades must be a positive integer");
   if (trades > 1000) throw new Error("trades max is 1000");
 
   const reinvestFraction = Math.min(100, Math.max(0, reinvestPercent)) / 100;
   let capital = startingCapital;
-  const milestones: Array<{ trade: number; capital: number; totalReturn: number }> = [];
+  let peakCapital = startingCapital;
+  let maxDrawdown = 0;
+  let ruinTrade: number | null = null;
+  const milestones: Array<{ trade: number; capital: number; totalReturn: number; drawdown?: number }> = [];
 
   for (let i = 1; i <= trades; i++) {
     const profit = capital * (returnPercent / 100);
-    const reinvested = profit * reinvestFraction;
-    capital += reinvested;
+
+    if (returnPercent > 0) {
+      // Positive return: reinvest fraction of profits
+      capital += profit * reinvestFraction;
+    } else {
+      // Negative return: full loss applies (drawdown modeling)
+      capital += profit;
+    }
+
+    // Track drawdown from peak
+    if (capital > peakCapital) peakCapital = capital;
+    const currentDrawdown = peakCapital > 0 ? ((peakCapital - capital) / peakCapital) * 100 : 0;
+    if (currentDrawdown > maxDrawdown) maxDrawdown = currentDrawdown;
+
+    // Detect ruin (capital <= 0)
+    if (capital <= 0 && ruinTrade === null) {
+      ruinTrade = i;
+      capital = 0;
+    }
 
     // Record milestones
-    if (i <= 5 || i % 10 === 0 || i === trades) {
+    if (i <= 5 || i % 10 === 0 || i === trades || i === ruinTrade) {
       milestones.push({
         trade: i,
         capital: r(capital, 2),
         totalReturn: r(((capital - startingCapital) / startingCapital) * 100, 2),
+        ...(returnPercent < 0 && { drawdown: r(currentDrawdown, 2) }),
       });
     }
+
+    if (capital <= 0) break;
   }
+
+  const warnings: string[] = [];
+  if (ruinTrade !== null) warnings.push(`Account reaches zero at trade #${ruinTrade}`);
+  if (returnPercent < 0) warnings.push("Modeling drawdown scenario (negative returns)");
 
   return JSON.stringify({
     status: "ok",
@@ -398,12 +536,17 @@ function compoundCalc(args: any, start: number): string {
     totalProfit: r(capital - startingCapital, 2),
     totalReturnPercent: r(((capital - startingCapital) / startingCapital) * 100, 2),
     multiplier: r(capital / startingCapital, 2),
+    ...(returnPercent < 0 && { maxDrawdownPercent: r(maxDrawdown, 2) }),
+    ...(ruinTrade !== null && { ruinAtTrade: ruinTrade }),
     milestones,
+    ...(warnings.length > 0 && { warnings }),
     elapsedMs: Date.now() - start,
   });
 }
 
-/* ────────────────────── helpers ────────────────────── */
+/* ------------------------------------------------------------------ */
+/*  Helpers                                                           */
+/* ------------------------------------------------------------------ */
 
 function r(n: number, decimals = 4): number {
   return Math.round(n * Math.pow(10, decimals)) / Math.pow(10, decimals);
@@ -413,5 +556,52 @@ function requirePositive(fields: Record<string, any>): void {
   for (const [name, value] of Object.entries(fields)) {
     if (value === undefined || value === null) throw new Error(`${name} is required`);
     if (typeof value !== "number" || value <= 0) throw new Error(`${name} must be a positive number`);
+  }
+}
+
+/** Validate a single number is positive, return it */
+function requirePositiveNum(value: any, name: string): number {
+  if (value === undefined || value === null) throw new Error(`${name} is required`);
+  if (typeof value !== "number" || value <= 0) throw new Error(`${name} must be a positive number`);
+  return value;
+}
+
+/** Validate a number is >= 0, return it */
+function requireNonNegative(value: any, name: string): number {
+  if (typeof value !== "number" || value < 0) throw new Error(`${name} must be a non-negative number`);
+  return value;
+}
+
+/** Validate a number is within a range, return it */
+function requireInRange(value: any, name: string, min: number, max: number): number {
+  if (typeof value !== "number" || value < min || value > max) {
+    throw new Error(`${name} must be between ${min} and ${max}`);
+  }
+  return value;
+}
+
+/** Side-aware SL/TP validation */
+function validateSide(
+  side: string,
+  entryPrice: number,
+  stopLoss?: number,
+  takeProfit?: number,
+  _label?: string,
+): void {
+  if (stopLoss !== undefined) {
+    if (side === "long" && stopLoss >= entryPrice) {
+      throw new Error("For long: stopLoss must be below entryPrice");
+    }
+    if (side === "short" && stopLoss <= entryPrice) {
+      throw new Error("For short: stopLoss must be above entryPrice");
+    }
+  }
+  if (takeProfit !== undefined) {
+    if (side === "long" && takeProfit <= entryPrice) {
+      throw new Error("For long: takeProfit must be above entryPrice");
+    }
+    if (side === "short" && takeProfit >= entryPrice) {
+      throw new Error("For short: takeProfit must be below entryPrice");
+    }
   }
 }

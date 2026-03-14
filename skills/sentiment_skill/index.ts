@@ -7,7 +7,7 @@ export const parameters = {
       type: "string",
       enum: ["crypto_news", "coin_sentiment", "market_overview", "social_stats", "events"],
       description:
-        "Action: crypto_news (latest crypto headlines), coin_sentiment (sentiment for a specific coin), market_overview (broad market sentiment snapshot), social_stats (social media metrics for a coin), events (upcoming crypto events).",
+        "Action: crypto_news (latest crypto headlines), coin_sentiment (sentiment for a specific coin), market_overview (broad market sentiment snapshot), social_stats (social media metrics for a coin), events (project status updates or trending coins).",
     },
     coinId: { type: "string", description: "CoinGecko coin ID (e.g. 'bitcoin', 'ethereum')" },
     symbol: { type: "string", description: "Ticker symbol (e.g. 'BTC'). Auto-resolved to coinId." },
@@ -18,10 +18,12 @@ export const parameters = {
   required: ["action"],
 };
 
-/* ────────────────────── constants ────────────────────── */
+/* ------------------------------------------------------------------ */
+/*  Constants                                                         */
+/* ------------------------------------------------------------------ */
 
 const CG_BASE = "https://api.coingecko.com/api/v3";
-const TIMEOUT = 10000;
+const TIMEOUT = 10_000;
 const MAX_RETRIES = 2;
 
 const SYMBOL_MAP: Record<string, string> = {
@@ -33,28 +35,101 @@ const SYMBOL_MAP: Record<string, string> = {
   SUI: "sui", PEPE: "pepe", SHIB: "shiba-inu", AAVE: "aave",
 };
 
-// RSS-to-JSON proxy feeds (free, no API key)
-const NEWS_SOURCES = [
-  { name: "CoinDesk", url: "https://api.rss2json.com/v1/api.json?rss_url=https%3A%2F%2Fwww.coindesk.com%2Farc%2Foutboundfeeds%2Frss%2F" },
-  { name: "CoinTelegraph", url: "https://api.rss2json.com/v1/api.json?rss_url=https%3A%2F%2Fcointelegraph.com%2Frss" },
+/* Cached /coins/list for dynamic symbol resolution */
+let coinListCache: Array<{ id: string; symbol: string }> | null = null;
+let coinListCacheTs = 0;
+const COIN_LIST_TTL = 3_600_000; // 1 hour
+
+/* RSS sources -- primary: direct XML fetch, fallback: rss2json proxy */
+const RSS_FEEDS = [
+  {
+    name: "CoinDesk",
+    directUrl: "https://www.coindesk.com/arc/outboundfeeds/rss/",
+    proxyUrl: "https://api.rss2json.com/v1/api.json?rss_url=https%3A%2F%2Fwww.coindesk.com%2Farc%2Foutboundfeeds%2Frss%2F",
+  },
+  {
+    name: "CoinTelegraph",
+    directUrl: "https://cointelegraph.com/rss",
+    proxyUrl: "https://api.rss2json.com/v1/api.json?rss_url=https%3A%2F%2Fcointelegraph.com%2Frss",
+  },
 ];
 
-/* ────────────────────── helpers ────────────────────── */
+/* ------------------------------------------------------------------ */
+/*  TTL cache                                                         */
+/* ------------------------------------------------------------------ */
 
-function fail(error: string, category: string, start: number): string {
+interface CacheEntry { data: any; ts: number; }
+const cache = new Map<string, CacheEntry>();
+const TTL: Record<string, number> = {
+  global: 120_000,    // 2 min
+  trending: 300_000,  // 5 min
+  fng: 600_000,       // 10 min
+};
+
+function getCached(key: string): any | null {
+  const entry = cache.get(key);
+  if (!entry) return null;
+  const ttl = TTL[key] ?? 120_000;
+  if (Date.now() - entry.ts > ttl) { cache.delete(key); return null; }
+  return entry.data;
+}
+
+function setCache(key: string, data: any): void {
+  cache.set(key, { data, ts: Date.now() });
+}
+
+/* ------------------------------------------------------------------ */
+/*  Helpers                                                           */
+/* ------------------------------------------------------------------ */
+
+type ErrorCategory = "validation" | "not_found" | "rate_limited" | "network" | "unknown";
+
+function categorizeError(err: any): ErrorCategory {
+  const status = err.response?.status;
+  if (status === 404) return "not_found";
+  if (status === 429) return "rate_limited";
+  if (status === 400 || status === 422) return "validation";
+  const code = err.code;
+  if (["ETIMEDOUT", "ECONNRESET", "ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN"].includes(code)) return "network";
+  if (status && status >= 500) return "network";
+  return "unknown";
+}
+
+function fail(error: string, category: ErrorCategory, start: number): string {
   return JSON.stringify({ status: "error", error, errorCategory: category, elapsedMs: Date.now() - start });
 }
 
-function resolveCoinId(args: any): string {
+async function resolveCoinId(args: any): Promise<string> {
   if (args.coinId) return args.coinId.toLowerCase().trim();
   if (args.symbol) {
     const upper = args.symbol.toUpperCase().trim().replace("/USDT", "").replace("/USD", "");
-    return SYMBOL_MAP[upper] || upper.toLowerCase();
+    // Static map first
+    if (SYMBOL_MAP[upper]) return SYMBOL_MAP[upper];
+    // Dynamic fallback via /coins/list
+    const list = await getCoinList();
+    const match = list.find((c) => c.symbol === upper.toLowerCase());
+    if (match) return match.id;
+    // Last resort: lowercase symbol
+    return upper.toLowerCase();
   }
-  throw new Error("coinId or symbol is required");
+  throw Object.assign(new Error("coinId or symbol is required"), { category: "validation" });
 }
 
-function r(n: number, dec = 2): number {
+async function getCoinList(): Promise<Array<{ id: string; symbol: string }>> {
+  if (coinListCache && Date.now() - coinListCacheTs < COIN_LIST_TTL) return coinListCache;
+  try {
+    const data = await fetchWithRetry(`${CG_BASE}/coins/list`, { include_platform: false });
+    coinListCache = (data || []).map((c: any) => ({ id: c.id, symbol: c.symbol }));
+    coinListCacheTs = Date.now();
+    return coinListCache!;
+  } catch {
+    return coinListCache || [];
+  }
+}
+
+/** Round number safely -- treats null/undefined as null, 0 stays 0 */
+function r(n: number | null | undefined, dec = 2): number | null {
+  if (n === null || n === undefined) return null;
   return Math.round(n * Math.pow(10, dec)) / Math.pow(10, dec);
 }
 
@@ -67,7 +142,7 @@ async function fetchWithRetry(url: string, params?: any): Promise<any> {
       const status = err.response?.status;
       const retryable = status === 429 || (status && status >= 500) || ["ETIMEDOUT", "ECONNRESET"].includes(err.code);
       if (attempt < MAX_RETRIES && retryable) {
-        await new Promise((r) => setTimeout(r, Math.pow(2, attempt) * 1500));
+        await new Promise((resolve) => setTimeout(resolve, Math.pow(2, attempt) * 1500));
         continue;
       }
       throw err;
@@ -75,7 +150,82 @@ async function fetchWithRetry(url: string, params?: any): Promise<any> {
   }
 }
 
-/* ────────────────────── execute ────────────────────── */
+/* Cached fetch -- checks TTL cache before network */
+async function cachedFetch(key: string, url: string, params?: any): Promise<any> {
+  const hit = getCached(key);
+  if (hit !== null) return hit;
+  const data = await fetchWithRetry(url, params);
+  setCache(key, data);
+  return data;
+}
+
+/* ------------------------------------------------------------------ */
+/*  RSS parsing (direct XML + rss2json proxy fallback)                */
+/* ------------------------------------------------------------------ */
+
+interface Article {
+  title: string;
+  link: string;
+  source: string;
+  pubDate: string;
+  description: string;
+}
+
+/** Minimal XML RSS item extractor -- no external dependency */
+function parseRssXml(xml: string, sourceName: string): Article[] {
+  const items: Article[] = [];
+  const itemRegex = /<item>([\s\S]*?)<\/item>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = itemRegex.exec(xml)) !== null) {
+    const block = match[1];
+    const title = extractTag(block, "title");
+    const link = extractTag(block, "link");
+    const pubDate = extractTag(block, "pubDate");
+    const description = stripHtml(extractTag(block, "description")).slice(0, 200);
+    if (title) items.push({ title, link, source: sourceName, pubDate, description });
+  }
+  return items;
+}
+
+function extractTag(block: string, tag: string): string {
+  // Handle CDATA: <title><![CDATA[Some text]]></title>
+  const cdataRe = new RegExp(`<${tag}[^>]*>\\s*<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>\\s*</${tag}>`, "i");
+  const cdataMatch = cdataRe.exec(block);
+  if (cdataMatch) return cdataMatch[1].trim();
+  // Plain text
+  const plainRe = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, "i");
+  const plainMatch = plainRe.exec(block);
+  return plainMatch ? plainMatch[1].trim() : "";
+}
+
+async function fetchArticlesFromSource(feed: typeof RSS_FEEDS[number]): Promise<Article[]> {
+  // Try direct RSS XML first
+  try {
+    const resp = await axios.get(feed.directUrl, { timeout: TIMEOUT, responseType: "text" });
+    const articles = parseRssXml(resp.data, feed.name);
+    if (articles.length > 0) return articles;
+  } catch { /* fall through to proxy */ }
+
+  // Fallback: rss2json proxy
+  try {
+    const data = await fetchWithRetry(feed.proxyUrl);
+    if (data?.items) {
+      return data.items.map((item: any) => ({
+        title: item.title || "",
+        link: item.link || "",
+        source: feed.name,
+        pubDate: item.pubDate || "",
+        description: stripHtml(item.description || "").slice(0, 200),
+      }));
+    }
+  } catch { /* both failed */ }
+
+  return [];
+}
+
+/* ------------------------------------------------------------------ */
+/*  Execute                                                           */
+/* ------------------------------------------------------------------ */
 
 export async function execute(args: any): Promise<string> {
   const start = Date.now();
@@ -89,80 +239,60 @@ export async function execute(args: any): Promise<string> {
       case "social_stats": return await handleSocialStats(args, start);
       case "events": return await handleEvents(args, start);
       default:
-        throw new Error(`Unknown action: ${action}. Use: crypto_news, coin_sentiment, market_overview, social_stats, events`);
+        throw Object.assign(
+          new Error(`Unknown action: ${action}. Use: crypto_news, coin_sentiment, market_overview, social_stats, events`),
+          { category: "validation" as ErrorCategory },
+        );
     }
   } catch (err: any) {
-    return fail(err.message, (err as any).category || "unknown", start);
+    return fail(err.message, err.category || categorizeError(err), start);
   }
 }
 
-/* ────────────────────── crypto_news ────────────────────── */
+/* ------------------------------------------------------------------ */
+/*  crypto_news                                                       */
+/* ------------------------------------------------------------------ */
 
 async function handleNews(args: any, start: number): Promise<string> {
   const limit = Math.min(Math.max(1, Number(args.limit) || 10), 30);
   const query = args.query?.toLowerCase() || "";
 
-  const allArticles: Array<{
-    title: string;
-    link: string;
-    source: string;
-    pubDate: string;
-    description: string;
-  }> = [];
-
-  // Fetch from multiple RSS sources in parallel
-  const fetches = NEWS_SOURCES.map(async (source) => {
-    try {
-      const data = await fetchWithRetry(source.url);
-      if (data?.items) {
-        for (const item of data.items) {
-          allArticles.push({
-            title: item.title || "",
-            link: item.link || "",
-            source: source.name,
-            pubDate: item.pubDate || "",
-            description: stripHtml(item.description || "").slice(0, 200),
-          });
-        }
-      }
-    } catch {
-      // Skip failed source
-    }
-  });
-
-  await Promise.all(fetches);
+  // Fetch from all RSS sources in parallel (direct XML with proxy fallback)
+  const fetches = RSS_FEEDS.map((feed) => fetchArticlesFromSource(feed));
+  const results = await Promise.all(fetches);
+  let allArticles = results.flat();
 
   // Filter by query if provided
-  let filtered = allArticles;
   if (query) {
     const terms = query.split(/\s+/);
-    filtered = allArticles.filter((a) => {
+    allArticles = allArticles.filter((a) => {
       const text = `${a.title} ${a.description}`.toLowerCase();
       return terms.some((t: string) => text.includes(t));
     });
   }
 
   // Sort by date descending
-  filtered.sort((a, b) => new Date(b.pubDate).getTime() - new Date(a.pubDate).getTime());
-  filtered = filtered.slice(0, limit);
+  allArticles.sort((a, b) => new Date(b.pubDate).getTime() - new Date(a.pubDate).getTime());
+  allArticles = allArticles.slice(0, limit);
 
   return JSON.stringify({
     status: "ok",
     action: "crypto_news",
     query: query || undefined,
-    count: filtered.length,
-    articles: filtered,
+    count: allArticles.length,
+    articles: allArticles,
     elapsedMs: Date.now() - start,
   });
 }
 
-/* ────────────────────── coin_sentiment ────────────────────── */
+/* ------------------------------------------------------------------ */
+/*  coin_sentiment                                                    */
+/* ------------------------------------------------------------------ */
 
 async function handleCoinSentiment(args: any, start: number): Promise<string> {
-  const coinId = resolveCoinId(args);
+  const coinId = await resolveCoinId(args);
   const currency = (args.currency || "usd").toLowerCase();
 
-  // Fetch coin data + market data for sentiment signals
   const [coinData, fngData] = await Promise.all([
     fetchWithRetry(`${CG_BASE}/coins/${coinId}`, {
       localization: false,
@@ -171,29 +301,28 @@ async function handleCoinSentiment(args: any, start: number): Promise<string> {
       community_data: true,
       developer_data: true,
     }),
-    fetchWithRetry("https://api.alternative.me/fng/?limit=1").catch(() => null),
+    cachedFetch("fng", "https://api.alternative.me/fng/?limit=1").catch(() => null),
   ]);
 
   const md = coinData.market_data;
   const community = coinData.community_data || {};
-  const developer = coinData.developer_data || {};
 
   // Build sentiment signals
   const signals: Array<{ signal: string; value: any; interpretation: string }> = [];
 
-  // Price momentum signals
-  const change24h = md?.price_change_percentage_24h;
-  const change7d = md?.price_change_percentage_7d;
-  const change30d = md?.price_change_percentage_30d;
+  // Price momentum signals -- use explicit null checks to preserve 0
+  const change24h: number | null = md?.price_change_percentage_24h ?? null;
+  const change7d: number | null = md?.price_change_percentage_7d ?? null;
+  const change30d: number | null = md?.price_change_percentage_30d ?? null;
 
-  if (change24h !== undefined) {
+  if (change24h !== null) {
     signals.push({
       signal: "24h price change",
       value: r(change24h) + "%",
       interpretation: change24h > 5 ? "Strong bullish" : change24h > 0 ? "Bullish" : change24h > -5 ? "Bearish" : "Strong bearish",
     });
   }
-  if (change7d !== undefined) {
+  if (change7d !== null) {
     signals.push({
       signal: "7d price change",
       value: r(change7d) + "%",
@@ -201,9 +330,11 @@ async function handleCoinSentiment(args: any, start: number): Promise<string> {
     });
   }
 
-  // Volume signal
-  if (md?.total_volume?.[currency] && md?.market_cap?.[currency]) {
-    const volToMcap = md.total_volume[currency] / md.market_cap[currency];
+  // Volume signal -- safe number check
+  const vol = md?.total_volume?.[currency];
+  const mcap = md?.market_cap?.[currency];
+  if (typeof vol === "number" && typeof mcap === "number" && mcap > 0) {
+    const volToMcap = vol / mcap;
     signals.push({
       signal: "Volume/MarketCap ratio",
       value: r(volToMcap, 4),
@@ -211,40 +342,40 @@ async function handleCoinSentiment(args: any, start: number): Promise<string> {
     });
   }
 
-  // ATH distance
-  if (md?.ath_change_percentage?.[currency]) {
-    const athDist = md.ath_change_percentage[currency];
+  // ATH distance -- use ?? null to preserve 0
+  const athDist: number | null = md?.ath_change_percentage?.[currency] ?? null;
+  if (athDist !== null) {
     signals.push({
       signal: "Distance from ATH",
       value: r(athDist) + "%",
-      interpretation: athDist > -10 ? "Near ATH — caution" : athDist > -30 ? "Healthy range" : athDist > -60 ? "Significant discount" : "Deep discount from ATH",
+      interpretation: athDist > -10 ? "Near ATH - caution" : athDist > -30 ? "Healthy range" : athDist > -60 ? "Significant discount" : "Deep discount from ATH",
     });
   }
 
   // Community signals
-  if (community.twitter_followers) {
+  if (typeof community.twitter_followers === "number") {
     signals.push({
       signal: "Twitter followers",
       value: community.twitter_followers,
-      interpretation: community.twitter_followers > 1000000 ? "Major project" : community.twitter_followers > 100000 ? "Established project" : "Growing project",
+      interpretation: community.twitter_followers > 1_000_000 ? "Major project" : community.twitter_followers > 100_000 ? "Established project" : "Growing project",
     });
   }
 
   // Fear & Greed
-  if (fngData?.data?.[0]) {
-    const fng = fngData.data[0];
+  const fngValue = fngData?.data?.[0]?.value != null ? parseInt(fngData.data[0].value, 10) : null;
+  if (fngValue !== null) {
     signals.push({
       signal: "Fear & Greed Index",
-      value: parseInt(fng.value, 10),
-      interpretation: fng.value_classification,
+      value: fngValue,
+      interpretation: fngData.data[0].value_classification,
     });
   }
 
-  // Overall sentiment score (simple weighted average)
+  // Overall sentiment score (weighted)
   let sentimentScore = 50; // neutral baseline
-  if (change24h !== undefined) sentimentScore += Math.max(-20, Math.min(20, change24h * 2));
-  if (change7d !== undefined) sentimentScore += Math.max(-15, Math.min(15, change7d));
-  if (fngData?.data?.[0]) sentimentScore += (parseInt(fngData.data[0].value, 10) - 50) * 0.3;
+  if (change24h !== null) sentimentScore += Math.max(-20, Math.min(20, change24h * 2));
+  if (change7d !== null) sentimentScore += Math.max(-15, Math.min(15, change7d));
+  if (fngValue !== null) sentimentScore += (fngValue - 50) * 0.3;
   sentimentScore = Math.max(0, Math.min(100, sentimentScore));
 
   let sentimentLabel: string;
@@ -264,24 +395,26 @@ async function handleCoinSentiment(args: any, start: number): Promise<string> {
     sentimentLabel,
     signals,
     priceData: {
-      price: md?.current_price?.[currency],
-      change24h: change24h ? r(change24h) : null,
-      change7d: change7d ? r(change7d) : null,
-      change30d: change30d ? r(change30d) : null,
-      volume24h: md?.total_volume?.[currency],
-      marketCap: md?.market_cap?.[currency],
+      price: md?.current_price?.[currency] ?? null,
+      change24h: r(change24h),
+      change7d: r(change7d),
+      change30d: r(change30d),
+      volume24h: md?.total_volume?.[currency] ?? null,
+      marketCap: md?.market_cap?.[currency] ?? null,
     },
     elapsedMs: Date.now() - start,
   });
 }
 
-/* ────────────────────── market_overview ────────────────────── */
+/* ------------------------------------------------------------------ */
+/*  market_overview                                                   */
+/* ------------------------------------------------------------------ */
 
 async function handleMarketOverview(args: any, start: number): Promise<string> {
   const [global, fng, trending] = await Promise.all([
-    fetchWithRetry(`${CG_BASE}/global`),
-    fetchWithRetry("https://api.alternative.me/fng/?limit=7").catch(() => null),
-    fetchWithRetry(`${CG_BASE}/search/trending`).catch(() => null),
+    cachedFetch("global", `${CG_BASE}/global`),
+    cachedFetch("fng", "https://api.alternative.me/fng/?limit=7").catch(() => null),
+    cachedFetch("trending", `${CG_BASE}/search/trending`).catch(() => null),
   ]);
 
   const gd = global?.data || {};
@@ -297,8 +430,7 @@ async function handleMarketOverview(args: any, start: number): Promise<string> {
     rank: item.item?.market_cap_rank,
   }));
 
-  // Market health assessment
-  const marketCapChange = gd.market_cap_change_percentage_24h_usd || 0;
+  const marketCapChange = gd.market_cap_change_percentage_24h_usd ?? 0;
   let marketHealth: string;
   if (marketCapChange > 3) marketHealth = "Strong Rally";
   else if (marketCapChange > 0) marketHealth = "Positive";
@@ -309,12 +441,12 @@ async function handleMarketOverview(args: any, start: number): Promise<string> {
     status: "ok",
     action: "market_overview",
     marketHealth,
-    totalMarketCap: gd.total_market_cap?.usd ? r(gd.total_market_cap.usd) : null,
-    totalVolume24h: gd.total_volume?.usd ? r(gd.total_volume.usd) : null,
+    totalMarketCap: gd.total_market_cap?.usd ?? null,
+    totalVolume24h: gd.total_volume?.usd ?? null,
     marketCapChange24h: r(marketCapChange),
-    btcDominance: gd.market_cap_percentage?.btc ? r(gd.market_cap_percentage.btc, 1) : null,
-    ethDominance: gd.market_cap_percentage?.eth ? r(gd.market_cap_percentage.eth, 1) : null,
-    activeCryptos: gd.active_cryptocurrencies,
+    btcDominance: r(gd.market_cap_percentage?.btc ?? null, 1),
+    ethDominance: r(gd.market_cap_percentage?.eth ?? null, 1),
+    activeCryptos: gd.active_cryptocurrencies ?? null,
     fearGreed: fngCurrent ? {
       value: parseInt(fngCurrent.value, 10),
       label: fngCurrent.value_classification,
@@ -325,10 +457,12 @@ async function handleMarketOverview(args: any, start: number): Promise<string> {
   });
 }
 
-/* ────────────────────── social_stats ────────────────────── */
+/* ------------------------------------------------------------------ */
+/*  social_stats                                                      */
+/* ------------------------------------------------------------------ */
 
 async function handleSocialStats(args: any, start: number): Promise<string> {
-  const coinId = resolveCoinId(args);
+  const coinId = await resolveCoinId(args);
 
   const data = await fetchWithRetry(`${CG_BASE}/coins/${coinId}`, {
     localization: false,
@@ -348,43 +482,45 @@ async function handleSocialStats(args: any, start: number): Promise<string> {
     symbol: data.symbol?.toUpperCase(),
     name: data.name,
     community: {
-      twitterFollowers: community.twitter_followers,
-      redditSubscribers: community.reddit_subscribers,
-      redditActiveAccounts48h: community.reddit_accounts_active_48h,
-      redditAvgPosts48h: community.reddit_average_posts_48h ? r(community.reddit_average_posts_48h) : null,
-      redditAvgComments48h: community.reddit_average_comments_48h ? r(community.reddit_average_comments_48h) : null,
-      telegramChannelMembers: community.telegram_channel_user_count,
+      twitterFollowers: community.twitter_followers ?? null,
+      redditSubscribers: community.reddit_subscribers ?? null,
+      redditActiveAccounts48h: community.reddit_accounts_active_48h ?? null,
+      redditAvgPosts48h: r(community.reddit_average_posts_48h ?? null),
+      redditAvgComments48h: r(community.reddit_average_comments_48h ?? null),
+      telegramChannelMembers: community.telegram_channel_user_count ?? null,
     },
     developer: {
-      forks: developer.forks,
-      stars: developer.stars,
-      subscribers: developer.subscribers,
-      totalIssues: developer.total_issues,
-      closedIssues: developer.closed_issues,
-      pullRequestsMerged: developer.pull_requests_merged,
-      pullRequestContributors: developer.pull_request_contributors,
-      commitCount4Weeks: developer.commit_count_4_weeks,
+      forks: developer.forks ?? null,
+      stars: developer.stars ?? null,
+      subscribers: developer.subscribers ?? null,
+      totalIssues: developer.total_issues ?? null,
+      closedIssues: developer.closed_issues ?? null,
+      pullRequestsMerged: developer.pull_requests_merged ?? null,
+      pullRequestContributors: developer.pull_request_contributors ?? null,
+      commitCount4Weeks: developer.commit_count_4_weeks ?? null,
     },
     links: {
-      homepage: data.links?.homepage?.[0],
-      github: data.links?.repos_url?.github?.[0],
+      homepage: data.links?.homepage?.[0] || null,
+      github: data.links?.repos_url?.github?.[0] || null,
       twitter: data.links?.twitter_screen_name ? `https://twitter.com/${data.links.twitter_screen_name}` : null,
-      reddit: data.links?.subreddit_url,
+      reddit: data.links?.subreddit_url || null,
       telegram: data.links?.telegram_channel_identifier ? `https://t.me/${data.links.telegram_channel_identifier}` : null,
     },
     elapsedMs: Date.now() - start,
   });
 }
 
-/* ────────────────────── events ────────────────────── */
+/* ------------------------------------------------------------------ */
+/*  events                                                            */
+/* ------------------------------------------------------------------ */
 
 async function handleEvents(args: any, start: number): Promise<string> {
-  // CoinGecko events endpoint was deprecated, use status updates as alternative
-  const coinId = args.coinId || args.symbol ? resolveCoinId(args) : null;
+  const limit = Math.min(Math.max(1, Number(args.limit) || 10), 50);
+  const coinId = args.coinId || args.symbol ? await resolveCoinId(args) : null;
 
   if (coinId) {
-    const data = await fetchWithRetry(`${CG_BASE}/coins/${coinId}/status_updates`, { per_page: 10 });
-    const updates = (data?.status_updates || []).map((u: any) => ({
+    const data = await fetchWithRetry(`${CG_BASE}/coins/${coinId}/status_updates`, { per_page: limit });
+    const updates = (data?.status_updates || []).slice(0, limit).map((u: any) => ({
       title: u.title,
       description: u.description?.slice(0, 300),
       category: u.category,
@@ -402,9 +538,9 @@ async function handleEvents(args: any, start: number): Promise<string> {
     });
   }
 
-  // Global trending as events proxy
-  const trending = await fetchWithRetry(`${CG_BASE}/search/trending`);
-  const coins = (trending?.coins || []).map((item: any) => ({
+  // No coin specified -- return trending coins, respecting limit
+  const trending = await cachedFetch("trending", `${CG_BASE}/search/trending`);
+  const coins = (trending?.coins || []).slice(0, limit).map((item: any) => ({
     symbol: item.item?.symbol?.toUpperCase(),
     name: item.item?.name,
     rank: item.item?.market_cap_rank,
@@ -415,13 +551,23 @@ async function handleEvents(args: any, start: number): Promise<string> {
     status: "ok",
     action: "events",
     note: "Showing trending coins as event proxy. Provide coinId for project-specific updates.",
+    count: coins.length,
     trending: coins,
     elapsedMs: Date.now() - start,
   });
 }
 
-/* ────────────────────── utility ────────────────────── */
+/* ------------------------------------------------------------------ */
+/*  Utility                                                           */
+/* ------------------------------------------------------------------ */
 
 function stripHtml(html: string): string {
-  return html.replace(/<[^>]*>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").trim();
+  return html
+    .replace(/<[^>]*>/g, "")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .trim();
 }

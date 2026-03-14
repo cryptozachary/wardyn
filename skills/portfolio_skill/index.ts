@@ -30,18 +30,27 @@ export const parameters = {
     exitPrice: { type: "number", description: "Exit price (required for close)" },
     id: { type: "string", description: "Position ID (required for close/update/delete/note)" },
 
+    // Fee fields
+    feePercent: { type: "number", description: "Total round-trip fee percentage (default: 0.2 = 0.1% entry + 0.1% exit)" },
+    slippagePercent: { type: "number", description: "Estimated slippage percentage (default: 0)" },
+
     // Note
     note: { type: "string", description: "Note text to add to a position" },
 
-    // Filters
-    status: { type: "string", enum: ["open", "closed", "all"], description: "Filter by status for list/history (default: open for list, closed for history)" },
-    portfolioName: { type: "string", description: "Portfolio name (default: 'default')" },
-    limit: { type: "number", description: "Max results for history (default: 50)" },
+    // Filters & pagination
+    status: { type: "string", enum: ["open", "closed", "all"], description: "Filter by status (default: open for list, closed for history)" },
+    portfolioName: { type: "string", description: "Portfolio name (default: 'default'). Mutating actions scope to this portfolio." },
+    limit: { type: "number", description: "Max results (default: 50 for history, 50 for list)" },
+    offset: { type: "number", description: "Skip first N results for pagination (default: 0)" },
+    sortBy: { type: "string", enum: ["openedAt", "entryPrice", "symbol", "pnl", "closedAt"], description: "Sort field (default: openedAt for list, closedAt for history)" },
+    sortOrder: { type: "string", enum: ["asc", "desc"], description: "Sort direction (default: desc)" },
   },
   required: ["action"],
 };
 
-/* ────────────────────── types ────────────────────── */
+/* ------------------------------------------------------------------ */
+/*  Types                                                             */
+/* ------------------------------------------------------------------ */
 
 interface Position {
   id: string;
@@ -61,6 +70,11 @@ interface Position {
   exitPrice?: number;
   pnl?: number;
   pnlPercent?: number;
+  pnlNet?: number;
+  pnlNetPercent?: number;
+  feePercent?: number;
+  slippagePercent?: number;
+  totalFees?: number;
   portfolioName: string;
 }
 
@@ -68,14 +82,20 @@ interface PortfolioStore {
   positions: Position[];
 }
 
-/* ────────────────────── constants ────────────────────── */
+/* ------------------------------------------------------------------ */
+/*  Constants                                                         */
+/* ------------------------------------------------------------------ */
 
 const CONFIG_DIR = path.join(process.cwd(), "config");
 const STORE_PATH = path.join(CONFIG_DIR, "portfolio.json");
-const MAX_POSITIONS = 500;
+const BACKUP_PATH = path.join(CONFIG_DIR, "portfolio.backup.json");
+const MAX_POSITIONS_PER_PORTFOLIO = 500;
 const MAX_NOTES_PER_POSITION = 50;
+const DEFAULT_FEE_PERCENT = 0.2; // 0.1% entry + 0.1% exit
 
-/* ────────────────────── concurrency-safe persistence ────────────────────── */
+/* ------------------------------------------------------------------ */
+/*  Concurrency-safe persistence                                      */
+/* ------------------------------------------------------------------ */
 
 let storeLock: Promise<void> = Promise.resolve();
 
@@ -89,17 +109,47 @@ function withLock<T>(fn: () => Promise<T>): Promise<T> {
 async function loadStore(): Promise<PortfolioStore> {
   try {
     const raw = await fs.readFile(STORE_PATH, "utf8");
-    return JSON.parse(raw);
-  } catch {
-    return { positions: [] };
+    const parsed = JSON.parse(raw);
+    // Basic structure validation
+    if (!parsed || !Array.isArray(parsed.positions)) {
+      throw new Error("Invalid store structure");
+    }
+    return parsed;
+  } catch (err: any) {
+    // File not found -- fresh store
+    if (err.code === "ENOENT") return { positions: [] };
+    // JSON parse error or invalid structure -- corruption
+    if (err instanceof SyntaxError || err.message === "Invalid store structure") {
+      // Try to read backup
+      try {
+        const backupRaw = await fs.readFile(BACKUP_PATH, "utf8");
+        const backup = JSON.parse(backupRaw);
+        if (backup && Array.isArray(backup.positions)) {
+          // Restore from backup, save as primary
+          await fs.writeFile(STORE_PATH, backupRaw, "utf8");
+          return backup;
+        }
+      } catch { /* backup also failed */ }
+      // No backup available -- throw rather than silently reset
+      throw new Error(
+        `portfolio.json is corrupted and no valid backup exists. ` +
+        `Manual fix: inspect config/portfolio.json or delete it to start fresh.`
+      );
+    }
+    throw err;
   }
 }
 
 async function saveStore(store: PortfolioStore): Promise<void> {
   await fs.mkdir(CONFIG_DIR, { recursive: true });
+  const data = JSON.stringify(store, null, 2);
   const tmp = path.join(CONFIG_DIR, `.portfolio_tmp_${crypto.randomBytes(8).toString("hex")}`);
   try {
-    await fs.writeFile(tmp, JSON.stringify(store, null, 2), "utf8");
+    // Backup current file before overwriting
+    try {
+      await fs.copyFile(STORE_PATH, BACKUP_PATH);
+    } catch { /* no existing file to backup */ }
+    await fs.writeFile(tmp, data, "utf8");
     await fs.rename(tmp, STORE_PATH);
   } catch (err) {
     await fs.unlink(tmp).catch(() => {});
@@ -107,23 +157,82 @@ async function saveStore(store: PortfolioStore): Promise<void> {
   }
 }
 
-/* ────────────────────── P&L calculation ────────────────────── */
+/* ------------------------------------------------------------------ */
+/*  ID generation with collision check                                */
+/* ------------------------------------------------------------------ */
 
-function calcPnl(side: "long" | "short", entryPrice: number, exitPrice: number, quantity: number): { pnl: number; pnlPercent: number } {
+function generateId(existing: Set<string>): string {
+  // 12 hex chars = 6 bytes = 281 trillion possible IDs
+  for (let i = 0; i < 10; i++) {
+    const id = crypto.randomBytes(6).toString("hex");
+    if (!existing.has(id)) return id;
+  }
+  // Fallback: 16 bytes (practically impossible to collide)
+  return crypto.randomBytes(16).toString("hex");
+}
+
+/* ------------------------------------------------------------------ */
+/*  P&L calculation (with fees + slippage)                            */
+/* ------------------------------------------------------------------ */
+
+function calcPnl(
+  side: "long" | "short",
+  entryPrice: number,
+  exitPrice: number,
+  quantity: number,
+  feePercent: number,
+  slippagePercent: number,
+): { pnl: number; pnlPercent: number; pnlNet: number; pnlNetPercent: number; totalFees: number } {
+  // Gross P&L
   const pnl = side === "long"
     ? (exitPrice - entryPrice) * quantity
     : (entryPrice - exitPrice) * quantity;
   const pnlPercent = side === "long"
     ? ((exitPrice - entryPrice) / entryPrice) * 100
     : ((entryPrice - exitPrice) / entryPrice) * 100;
-  return { pnl: round(pnl), pnlPercent: round(pnlPercent) };
+
+  // Fee + slippage cost
+  const notional = entryPrice * quantity;
+  const totalFeeRate = (feePercent + slippagePercent) / 100;
+  const totalFees = notional * totalFeeRate;
+
+  // Net P&L
+  const pnlNet = pnl - totalFees;
+  const pnlNetPercent = (pnlNet / notional) * 100;
+
+  return {
+    pnl: round(pnl),
+    pnlPercent: round(pnlPercent),
+    pnlNet: round(pnlNet),
+    pnlNetPercent: round(pnlNetPercent),
+    totalFees: round(totalFees),
+  };
 }
 
 function round(n: number, decimals = 4): number {
   return Math.round(n * Math.pow(10, decimals)) / Math.pow(10, decimals);
 }
 
-/* ────────────────────── execute ────────────────────── */
+/* ------------------------------------------------------------------ */
+/*  Portfolio-scoped position lookup                                  */
+/* ------------------------------------------------------------------ */
+
+function findPosition(store: PortfolioStore, id: string, portfolioName: string): Position {
+  const pos = store.positions.find((p) => p.id === id && p.portfolioName === portfolioName);
+  if (!pos) {
+    // Check if it exists in another portfolio for a better error message
+    const other = store.positions.find((p) => p.id === id);
+    if (other) {
+      throw new Error(`Position ${id} belongs to portfolio "${other.portfolioName}", not "${portfolioName}"`);
+    }
+    throw new Error(`Position ${id} not found in portfolio "${portfolioName}"`);
+  }
+  return pos;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Execute                                                           */
+/* ------------------------------------------------------------------ */
 
 export async function execute(args: any): Promise<string> {
   const start = Date.now();
@@ -147,6 +256,10 @@ export async function execute(args: any): Promise<string> {
   }
 }
 
+/* ------------------------------------------------------------------ */
+/*  open                                                              */
+/* ------------------------------------------------------------------ */
+
 async function handleOpen(args: any, start: number): Promise<string> {
   const { symbol, side, entryPrice, quantity, stopLoss, takeProfit, exchange, strategy, tags } = args;
   const portfolioName = args.portfolioName || "default";
@@ -169,11 +282,19 @@ async function handleOpen(args: any, start: number): Promise<string> {
   }
 
   const store = await loadStore();
-  const openCount = store.positions.filter((p) => p.status === "open").length;
-  if (openCount >= MAX_POSITIONS) throw new Error(`Max open positions (${MAX_POSITIONS}) reached`);
+
+  // Per-portfolio open position limit
+  const openInPortfolio = store.positions.filter(
+    (p) => p.status === "open" && p.portfolioName === portfolioName,
+  ).length;
+  if (openInPortfolio >= MAX_POSITIONS_PER_PORTFOLIO) {
+    throw new Error(`Max open positions (${MAX_POSITIONS_PER_PORTFOLIO}) reached in portfolio "${portfolioName}"`);
+  }
+
+  const existingIds = new Set(store.positions.map((p) => p.id));
 
   const position: Position = {
-    id: crypto.randomBytes(4).toString("hex"),
+    id: generateId(existingIds),
     symbol: symbol.toUpperCase().trim(),
     side,
     entryPrice,
@@ -211,28 +332,43 @@ async function handleOpen(args: any, start: number): Promise<string> {
       notionalValue: round(entryPrice * quantity, 2),
       maxLoss: stopLoss ? round(Math.abs(entryPrice - stopLoss) * quantity, 2) : undefined,
       maxProfit: takeProfit ? round(Math.abs(takeProfit - entryPrice) * quantity, 2) : undefined,
+      portfolioName,
     },
     elapsedMs: Date.now() - start,
   });
 }
 
+/* ------------------------------------------------------------------ */
+/*  close                                                             */
+/* ------------------------------------------------------------------ */
+
 async function handleClose(args: any, start: number): Promise<string> {
   const { id, exitPrice } = args;
+  const portfolioName = args.portfolioName || "default";
   if (!id) throw new Error("id is required for close");
   if (!exitPrice || typeof exitPrice !== "number" || exitPrice <= 0) throw new Error("exitPrice must be a positive number");
 
+  const feePercent = typeof args.feePercent === "number" ? Math.max(0, args.feePercent) : DEFAULT_FEE_PERCENT;
+  const slippagePercent = typeof args.slippagePercent === "number" ? Math.max(0, args.slippagePercent) : 0;
+
   const store = await loadStore();
-  const pos = store.positions.find((p) => p.id === id);
-  if (!pos) throw new Error(`Position ${id} not found`);
+  const pos = findPosition(store, id, portfolioName);
   if (pos.status === "closed") throw new Error(`Position ${id} is already closed`);
 
-  const { pnl, pnlPercent } = calcPnl(pos.side, pos.entryPrice, exitPrice, pos.quantity);
+  const { pnl, pnlPercent, pnlNet, pnlNetPercent, totalFees } = calcPnl(
+    pos.side, pos.entryPrice, exitPrice, pos.quantity, feePercent, slippagePercent,
+  );
 
   pos.status = "closed";
   pos.exitPrice = exitPrice;
   pos.closedAt = new Date().toISOString();
   pos.pnl = pnl;
   pos.pnlPercent = pnlPercent;
+  pos.pnlNet = pnlNet;
+  pos.pnlNetPercent = pnlNetPercent;
+  pos.feePercent = feePercent;
+  pos.slippagePercent = slippagePercent;
+  pos.totalFees = totalFees;
 
   await saveStore(store);
 
@@ -246,9 +382,14 @@ async function handleClose(args: any, start: number): Promise<string> {
       entryPrice: pos.entryPrice,
       exitPrice,
       quantity: pos.quantity,
-      pnl,
-      pnlPercent,
-      result: pnl >= 0 ? "win" : "loss",
+      pnlGross: pnl,
+      pnlGrossPercent: pnlPercent,
+      pnlNet,
+      pnlNetPercent,
+      totalFees,
+      feePercent,
+      slippagePercent,
+      result: pnlNet >= 0 ? "win" : "loss",
       holdingPeriod: pos.closedAt && pos.openedAt
         ? formatDuration(new Date(pos.closedAt).getTime() - new Date(pos.openedAt).getTime())
         : undefined,
@@ -257,13 +398,17 @@ async function handleClose(args: any, start: number): Promise<string> {
   });
 }
 
+/* ------------------------------------------------------------------ */
+/*  update                                                            */
+/* ------------------------------------------------------------------ */
+
 async function handleUpdate(args: any, start: number): Promise<string> {
   const { id, stopLoss, takeProfit } = args;
+  const portfolioName = args.portfolioName || "default";
   if (!id) throw new Error("id is required for update");
 
   const store = await loadStore();
-  const pos = store.positions.find((p) => p.id === id);
-  if (!pos) throw new Error(`Position ${id} not found`);
+  const pos = findPosition(store, id, portfolioName);
   if (pos.status === "closed") throw new Error(`Cannot update closed position ${id}`);
 
   if (stopLoss !== undefined) {
@@ -288,58 +433,116 @@ async function handleUpdate(args: any, start: number): Promise<string> {
     symbol: pos.symbol,
     stopLoss: pos.stopLoss,
     takeProfit: pos.takeProfit,
+    portfolioName,
     elapsedMs: Date.now() - start,
   });
 }
 
+/* ------------------------------------------------------------------ */
+/*  list (with status filter, pagination, sorting)                    */
+/* ------------------------------------------------------------------ */
+
 async function handleList(args: any, start: number): Promise<string> {
   const store = await loadStore();
   const portfolioName = args.portfolioName || "default";
-  const positions = store.positions.filter(
-    (p) => p.status === "open" && p.portfolioName === portfolioName,
-  );
+  const statusFilter: string = args.status || "open";
+  const limit = Math.min(Math.max(1, Number(args.limit) || 50), 200);
+  const offset = Math.max(0, Number(args.offset) || 0);
+  const sortBy = args.sortBy || "openedAt";
+  const sortOrder = args.sortOrder || "desc";
+
+  let positions = store.positions.filter((p) => p.portfolioName === portfolioName);
+
+  // Status filter
+  if (statusFilter !== "all") {
+    positions = positions.filter((p) => p.status === statusFilter);
+  }
+
+  // Sort
+  positions.sort((a, b) => {
+    let av: any, bv: any;
+    switch (sortBy) {
+      case "entryPrice": av = a.entryPrice; bv = b.entryPrice; break;
+      case "symbol": av = a.symbol; bv = b.symbol; break;
+      case "pnl": av = a.pnl ?? 0; bv = b.pnl ?? 0; break;
+      case "closedAt": av = a.closedAt || ""; bv = b.closedAt || ""; break;
+      default: av = a.openedAt; bv = b.openedAt; break;
+    }
+    if (av < bv) return sortOrder === "asc" ? -1 : 1;
+    if (av > bv) return sortOrder === "asc" ? 1 : -1;
+    return 0;
+  });
+
+  const total = positions.length;
+  positions = positions.slice(offset, offset + limit);
 
   return JSON.stringify({
     status: "ok",
     action: "list",
     portfolioName,
+    statusFilter,
+    total,
+    offset,
     count: positions.length,
     positions: positions.map((p) => ({
       id: p.id,
       symbol: p.symbol,
       side: p.side,
+      status: p.status,
       entryPrice: p.entryPrice,
+      exitPrice: p.exitPrice,
       quantity: p.quantity,
       stopLoss: p.stopLoss,
       takeProfit: p.takeProfit,
       exchange: p.exchange,
       strategy: p.strategy,
       tags: p.tags,
+      pnl: p.pnl,
+      pnlNet: p.pnlNet,
       notionalValue: round(p.entryPrice * p.quantity, 2),
       openedAt: p.openedAt,
+      closedAt: p.closedAt,
       noteCount: p.notes.length,
     })),
     elapsedMs: Date.now() - start,
   });
 }
 
+/* ------------------------------------------------------------------ */
+/*  history                                                           */
+/* ------------------------------------------------------------------ */
+
 async function handleHistory(args: any, start: number): Promise<string> {
   const store = await loadStore();
   const portfolioName = args.portfolioName || "default";
   const limit = Math.min(Math.max(1, Number(args.limit) || 50), 200);
+  const offset = Math.max(0, Number(args.offset) || 0);
+  const statusFilter: string = args.status || "closed";
 
-  let positions = store.positions.filter(
-    (p) => p.status === "closed" && p.portfolioName === portfolioName,
-  );
+  let positions = store.positions.filter((p) => p.portfolioName === portfolioName);
+
+  // Status filter
+  if (statusFilter !== "all") {
+    positions = positions.filter((p) => p.status === statusFilter);
+  }
 
   // Sort by closedAt descending (most recent first)
-  positions.sort((a, b) => new Date(b.closedAt!).getTime() - new Date(a.closedAt!).getTime());
-  positions = positions.slice(0, limit);
+  positions.sort((a, b) => {
+    const at = a.closedAt || a.openedAt;
+    const bt = b.closedAt || b.openedAt;
+    return new Date(bt).getTime() - new Date(at).getTime();
+  });
+
+  const total = positions.length;
+  positions = positions.slice(offset, offset + limit);
 
   return JSON.stringify({
     status: "ok",
     action: "history",
     portfolioName,
+    statusFilter,
+    total,
+    offset,
     count: positions.length,
     trades: positions.map((p) => ({
       id: p.id,
@@ -348,9 +551,11 @@ async function handleHistory(args: any, start: number): Promise<string> {
       entryPrice: p.entryPrice,
       exitPrice: p.exitPrice,
       quantity: p.quantity,
-      pnl: p.pnl,
-      pnlPercent: p.pnlPercent,
-      result: (p.pnl ?? 0) >= 0 ? "win" : "loss",
+      pnlGross: p.pnl,
+      pnlNet: p.pnlNet,
+      pnlNetPercent: p.pnlNetPercent,
+      totalFees: p.totalFees,
+      result: (p.pnlNet ?? p.pnl ?? 0) >= 0 ? "win" : "loss",
       strategy: p.strategy,
       openedAt: p.openedAt,
       closedAt: p.closedAt,
@@ -359,6 +564,10 @@ async function handleHistory(args: any, start: number): Promise<string> {
   });
 }
 
+/* ------------------------------------------------------------------ */
+/*  summary                                                           */
+/* ------------------------------------------------------------------ */
+
 async function handleSummary(args: any, start: number): Promise<string> {
   const store = await loadStore();
   const portfolioName = args.portfolioName || "default";
@@ -366,27 +575,33 @@ async function handleSummary(args: any, start: number): Promise<string> {
   const open = store.positions.filter((p) => p.status === "open" && p.portfolioName === portfolioName);
   const closed = store.positions.filter((p) => p.status === "closed" && p.portfolioName === portfolioName);
 
-  const wins = closed.filter((p) => (p.pnl ?? 0) >= 0);
-  const losses = closed.filter((p) => (p.pnl ?? 0) < 0);
-  const totalPnl = closed.reduce((sum, p) => sum + (p.pnl ?? 0), 0);
-  const totalWinPnl = wins.reduce((sum, p) => sum + (p.pnl ?? 0), 0);
-  const totalLossPnl = losses.reduce((sum, p) => sum + (p.pnl ?? 0), 0);
+  // Use net P&L when available, fall back to gross
+  const getPnl = (p: Position) => p.pnlNet ?? p.pnl ?? 0;
+
+  const wins = closed.filter((p) => getPnl(p) >= 0);
+  const losses = closed.filter((p) => getPnl(p) < 0);
+  const totalPnlGross = closed.reduce((sum, p) => sum + (p.pnl ?? 0), 0);
+  const totalPnlNet = closed.reduce((sum, p) => sum + getPnl(p), 0);
+  const totalFees = closed.reduce((sum, p) => sum + (p.totalFees ?? 0), 0);
+  const totalWinPnl = wins.reduce((sum, p) => sum + getPnl(p), 0);
+  const totalLossPnl = losses.reduce((sum, p) => sum + getPnl(p), 0);
   const avgWin = wins.length > 0 ? totalWinPnl / wins.length : 0;
   const avgLoss = losses.length > 0 ? Math.abs(totalLossPnl) / losses.length : 0;
   const winRate = closed.length > 0 ? (wins.length / closed.length) * 100 : 0;
   const profitFactor = totalLossPnl !== 0 ? Math.abs(totalWinPnl / totalLossPnl) : totalWinPnl > 0 ? Infinity : 0;
-  const expectancy = closed.length > 0 ? totalPnl / closed.length : 0;
+  const expectancy = closed.length > 0 ? totalPnlNet / closed.length : 0;
 
   // Largest win/loss
-  const largestWin = wins.length > 0 ? wins.reduce((best, p) => (p.pnl ?? 0) > (best.pnl ?? 0) ? p : best) : null;
-  const largestLoss = losses.length > 0 ? losses.reduce((worst, p) => (p.pnl ?? 0) < (worst.pnl ?? 0) ? p : worst) : null;
+  const largestWin = wins.length > 0 ? wins.reduce((best, p) => getPnl(p) > getPnl(best) ? p : best) : null;
+  const largestLoss = losses.length > 0 ? losses.reduce((worst, p) => getPnl(p) < getPnl(worst) ? p : worst) : null;
 
   // Win/loss streaks
   let currentStreak = 0;
   let maxWinStreak = 0;
   let maxLossStreak = 0;
-  for (const p of closed.sort((a, b) => new Date(a.closedAt!).getTime() - new Date(b.closedAt!).getTime())) {
-    if ((p.pnl ?? 0) >= 0) {
+  const sortedClosed = [...closed].sort((a, b) => new Date(a.closedAt!).getTime() - new Date(b.closedAt!).getTime());
+  for (const p of sortedClosed) {
+    if (getPnl(p) >= 0) {
       currentStreak = currentStreak >= 0 ? currentStreak + 1 : 1;
       maxWinStreak = Math.max(maxWinStreak, currentStreak);
     } else {
@@ -399,12 +614,13 @@ async function handleSummary(args: any, start: number): Promise<string> {
   const totalExposure = open.reduce((sum, p) => sum + p.entryPrice * p.quantity, 0);
 
   // By strategy breakdown
-  const strategyMap: Record<string, { wins: number; losses: number; pnl: number }> = {};
+  const strategyMap: Record<string, { wins: number; losses: number; pnlNet: number; fees: number }> = {};
   for (const p of closed) {
     const s = p.strategy || "untagged";
-    if (!strategyMap[s]) strategyMap[s] = { wins: 0, losses: 0, pnl: 0 };
-    strategyMap[s].pnl += p.pnl ?? 0;
-    if ((p.pnl ?? 0) >= 0) strategyMap[s].wins++;
+    if (!strategyMap[s]) strategyMap[s] = { wins: 0, losses: 0, pnlNet: 0, fees: 0 };
+    strategyMap[s].pnlNet += getPnl(p);
+    strategyMap[s].fees += p.totalFees ?? 0;
+    if (getPnl(p) >= 0) strategyMap[s].wins++;
     else strategyMap[s].losses++;
   }
 
@@ -413,60 +629,77 @@ async function handleSummary(args: any, start: number): Promise<string> {
     action: "summary",
     portfolioName,
     openPositions: open.length,
+    maxOpenPositions: MAX_POSITIONS_PER_PORTFOLIO,
     totalExposure: round(totalExposure, 2),
     closedTrades: closed.length,
     wins: wins.length,
     losses: losses.length,
     winRate: round(winRate, 1),
-    totalPnl: round(totalPnl, 2),
+    totalPnlGross: round(totalPnlGross, 2),
+    totalPnlNet: round(totalPnlNet, 2),
+    totalFees: round(totalFees, 2),
     avgWin: round(avgWin, 2),
     avgLoss: round(avgLoss, 2),
-    profitFactor: profitFactor === Infinity ? "∞" : round(profitFactor, 2),
+    profitFactor: profitFactor === Infinity ? "Infinity" : round(profitFactor, 2),
     expectancy: round(expectancy, 2),
     maxWinStreak,
     maxLossStreak,
-    largestWin: largestWin ? { symbol: largestWin.symbol, pnl: largestWin.pnl, strategy: largestWin.strategy } : null,
-    largestLoss: largestLoss ? { symbol: largestLoss.symbol, pnl: largestLoss.pnl, strategy: largestLoss.strategy } : null,
+    largestWin: largestWin ? { symbol: largestWin.symbol, pnl: getPnl(largestWin), strategy: largestWin.strategy } : null,
+    largestLoss: largestLoss ? { symbol: largestLoss.symbol, pnl: getPnl(largestLoss), strategy: largestLoss.strategy } : null,
     byStrategy: Object.entries(strategyMap).map(([name, stats]) => ({
       strategy: name,
       trades: stats.wins + stats.losses,
       wins: stats.wins,
       losses: stats.losses,
       winRate: round(((stats.wins / (stats.wins + stats.losses)) * 100), 1),
-      pnl: round(stats.pnl, 2),
+      pnlNet: round(stats.pnlNet, 2),
+      fees: round(stats.fees, 2),
     })),
     elapsedMs: Date.now() - start,
   });
 }
 
+/* ------------------------------------------------------------------ */
+/*  delete (portfolio-scoped)                                         */
+/* ------------------------------------------------------------------ */
+
 async function handleDelete(args: any, start: number): Promise<string> {
   const { id } = args;
+  const portfolioName = args.portfolioName || "default";
   if (!id) throw new Error("id is required for delete");
+
   const store = await loadStore();
-  const idx = store.positions.findIndex((p) => p.id === id);
-  if (idx < 0) throw new Error(`Position ${id} not found`);
-  const removed = store.positions.splice(idx, 1)[0];
+  const pos = findPosition(store, id, portfolioName);
+  const idx = store.positions.indexOf(pos);
+  store.positions.splice(idx, 1);
   await saveStore(store);
-  return JSON.stringify({ status: "ok", action: "delete", id, symbol: removed.symbol, elapsedMs: Date.now() - start });
+
+  return JSON.stringify({ status: "ok", action: "delete", id, symbol: pos.symbol, portfolioName, elapsedMs: Date.now() - start });
 }
+
+/* ------------------------------------------------------------------ */
+/*  note (portfolio-scoped)                                           */
+/* ------------------------------------------------------------------ */
 
 async function handleNote(args: any, start: number): Promise<string> {
   const { id, note } = args;
+  const portfolioName = args.portfolioName || "default";
   if (!id) throw new Error("id is required for note");
   if (!note || typeof note !== "string") throw new Error("note text is required");
 
   const store = await loadStore();
-  const pos = store.positions.find((p) => p.id === id);
-  if (!pos) throw new Error(`Position ${id} not found`);
+  const pos = findPosition(store, id, portfolioName);
   if (pos.notes.length >= MAX_NOTES_PER_POSITION) throw new Error(`Max notes (${MAX_NOTES_PER_POSITION}) reached for this position`);
 
   pos.notes.push({ text: note.slice(0, 500), ts: new Date().toISOString() });
   await saveStore(store);
 
-  return JSON.stringify({ status: "ok", action: "note", id, symbol: pos.symbol, noteCount: pos.notes.length, elapsedMs: Date.now() - start });
+  return JSON.stringify({ status: "ok", action: "note", id, symbol: pos.symbol, portfolioName, noteCount: pos.notes.length, elapsedMs: Date.now() - start });
 }
 
-/* ────────────────────── helpers ────────────────────── */
+/* ------------------------------------------------------------------ */
+/*  Helpers                                                           */
+/* ------------------------------------------------------------------ */
 
 function formatDuration(ms: number): string {
   if (ms <= 0) return "0s";
