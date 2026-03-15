@@ -1,7 +1,10 @@
+import os
 import sys, json
 import requests
 from PIL import Image
 from io import BytesIO
+
+OUTPUT_DIR = os.path.join(os.getcwd(), "output")
 
 def main():
     args = json.loads(sys.stdin.read())
@@ -10,7 +13,8 @@ def main():
         response = requests.get(url)
         response.raise_for_status()
         image = Image.open(BytesIO(response.content)).convert('L')
-        output = 'grayscale_image.png'
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        output = os.path.join(OUTPUT_DIR, 'grayscale_image.png')
         image.save(output)
         print(output)
     except Exception as e:

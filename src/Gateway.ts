@@ -20,6 +20,7 @@ import { auditLogger } from "./security/auditLog.js";
 import { exportSkill, importSkill, importFromUrl, listPackages, getPackage, deletePackage } from "./hub/hubManager.js";
 import { getMaskedSecrets, setSkillSecret, deleteSkillSecret, initSkillSecrets, migrateLegacySecrets } from "./security/skillSecrets.js";
 import { getPublicKey, ensureKeypair } from "./security/skillSigning.js";
+import { getLoopGuardStats } from "./security/loopGuard.js";
 import { createServer } from "http";
 import dotenv from "dotenv";
 dotenv.config();
@@ -522,6 +523,11 @@ app.get("/api/security/export", requireAuth, (_req, res) => {
 
 app.get("/api/security/verify-chain", requireAuth, (_req, res) => {
   res.json({ ok: true, ...auditLogger.verifyChain() });
+});
+
+app.get("/api/security/loop-guard", requireAuth, (req, res) => {
+  const sessionId = (req.query.sessionId as string) || "default";
+  res.json({ ok: true, ...getLoopGuardStats(sessionId) });
 });
 
 app.post("/api/security/clear", requireAuth, (_req, res) => {

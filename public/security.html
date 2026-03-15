@@ -104,6 +104,28 @@
     .btn-secondary:hover { background: #2d3a52; color: #e2e8f0; }
     .btn-danger { background: #7f1d1d; color: #fca5a5; border: 1px solid #ef4444; }
     .btn-danger:hover { background: #991b1b; }
+
+    /* Security systems grid */
+    .systems-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 12px; margin-bottom: 16px; }
+    .system-card { background: #141d35; border: 1px solid #1e2d4a; border-radius: 10px; padding: 16px; }
+    .system-card h3 { font-size: 13px; font-weight: 600; color: #94a3b8; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.5px; display: flex; align-items: center; gap: 8px; }
+    .system-card .status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .system-card .status-dot.green { background: #22c55e; box-shadow: 0 0 6px #22c55e88; }
+    .system-card .status-dot.yellow { background: #eab308; box-shadow: 0 0 6px #eab30888; }
+    .system-card .status-dot.red { background: #ef4444; box-shadow: 0 0 6px #ef444488; }
+    .system-card .status-dot.blue { background: #3b82f6; box-shadow: 0 0 6px #3b82f688; }
+    .system-detail { font-size: 12px; color: #64748b; line-height: 1.6; }
+    .system-detail .row { display: flex; justify-content: space-between; padding: 3px 0; }
+    .system-detail .val { color: #e2e8f0; font-family: monospace; font-size: 11px; }
+    .system-detail .val.ok { color: #4ade80; }
+    .system-detail .val.warn { color: #facc15; }
+    .system-detail .val.fail { color: #f87171; }
+    .pubkey-display { font-family: monospace; font-size: 10px; color: #60a5fa; background: #0a1a2a; padding: 8px; border-radius: 4px; word-break: break-all; margin-top: 8px; max-height: 60px; overflow-y: auto; }
+    .header-list { list-style: none; padding: 0; margin: 4px 0 0 0; }
+    .header-list li { font-size: 11px; color: #94a3b8; padding: 2px 0; font-family: monospace; }
+    .header-list li .hdr-name { color: #60a5fa; }
+    .verify-btn { padding: 4px 12px; border: 1px solid #1e2d4a; border-radius: 4px; background: #1e293b; color: #94a3b8; font-size: 11px; cursor: pointer; margin-top: 8px; }
+    .verify-btn:hover { background: #2d3a52; color: #e2e8f0; }
   </style>
 </head>
 <body>
@@ -113,6 +135,7 @@
       <a class="nav-link" href="/chat">Chat</a>
       <a class="nav-link" href="/ui/setup.html">Setup</a>
       <a class="nav-link" href="/ui/skills.html">Skills</a>
+      <a class="nav-link" href="/ui/hub.html">Hub</a>
       <a class="nav-link active" href="/ui/security.html">Security</a>
     </div>
   </div>
@@ -131,6 +154,80 @@
       <div class="card"><div class="value" id="totalExecs">0</div><div class="label">Tool Executions</div></div>
       <div class="card success"><div class="value" id="successRate">100%</div><div class="label">Success Rate</div></div>
       <div class="card"><div class="value" id="lastBlock">-</div><div class="label">Last Block</div></div>
+    </div>
+
+    <!-- Security Systems Status -->
+    <div class="systems-grid">
+      <!-- Hash-Chain Audit -->
+      <div class="system-card" id="chainCard">
+        <h3><span class="status-dot blue" id="chainDot"></span> Hash-Chain Audit Trail</h3>
+        <div class="system-detail">
+          <div class="row"><span>Chain Status</span><span class="val" id="chainStatus">Checking...</span></div>
+          <div class="row"><span>Total Entries</span><span class="val" id="chainTotal">-</span></div>
+          <div class="row"><span>Broken Links</span><span class="val" id="chainBroken">-</span></div>
+        </div>
+        <button class="verify-btn" id="verifyChainBtn">Verify Chain Integrity</button>
+      </div>
+
+      <!-- Loop Guard -->
+      <div class="system-card">
+        <h3><span class="status-dot green" id="loopDot"></span> Loop Guard</h3>
+        <div class="system-detail">
+          <div class="row"><span>Session Calls</span><span class="val" id="loopTotal">0</span></div>
+          <div class="row"><span>Unique Calls</span><span class="val" id="loopUnique">0</span></div>
+          <div class="row"><span>Circuit Trips</span><span class="val" id="loopTrips">0</span></div>
+          <div class="row"><span>Circuit State</span><span class="val" id="loopState">Closed</span></div>
+        </div>
+      </div>
+
+      <!-- Ed25519 Signing -->
+      <div class="system-card">
+        <h3><span class="status-dot blue" id="sigDot"></span> Ed25519 Signed Manifests</h3>
+        <div class="system-detail">
+          <div class="row"><span>Keypair Status</span><span class="val" id="sigStatus">Checking...</span></div>
+        </div>
+        <div class="pubkey-display" id="pubkeyDisplay">Loading...</div>
+      </div>
+
+      <!-- SSRF Protection -->
+      <div class="system-card">
+        <h3><span class="status-dot green"></span> SSRF Protection</h3>
+        <div class="system-detail">
+          <div class="row"><span>Status</span><span class="val ok">Active</span></div>
+          <div class="row"><span>Private IPs</span><span class="val ok">Blocked</span></div>
+          <div class="row"><span>Cloud Metadata</span><span class="val ok">Blocked</span></div>
+          <div class="row"><span>DNS Rebinding</span><span class="val ok">Protected</span></div>
+          <div class="row"><span>Dangerous Schemes</span><span class="val ok">Blocked</span></div>
+        </div>
+      </div>
+
+      <!-- Security Headers -->
+      <div class="system-card" id="headersCard">
+        <h3><span class="status-dot green" id="headersDot"></span> Security Headers</h3>
+        <div class="system-detail">
+          <ul class="header-list" id="headersList">
+            <li><span class="hdr-name">X-Content-Type-Options:</span> nosniff</li>
+            <li><span class="hdr-name">X-Frame-Options:</span> DENY</li>
+            <li><span class="hdr-name">X-XSS-Protection:</span> 1; mode=block</li>
+            <li><span class="hdr-name">Referrer-Policy:</span> no-referrer</li>
+            <li><span class="hdr-name">Content-Security-Policy:</span> active</li>
+            <li><span class="hdr-name">Permissions-Policy:</span> cam/mic/geo denied</li>
+          </ul>
+        </div>
+        <button class="verify-btn" id="verifyHeadersBtn">Verify Headers</button>
+      </div>
+
+      <!-- Health Endpoint -->
+      <div class="system-card">
+        <h3><span class="status-dot green"></span> Endpoint Hardening</h3>
+        <div class="system-detail">
+          <div class="row"><span>Health Redaction</span><span class="val ok">Active</span></div>
+          <div class="row"><span>Rate Limiting</span><span class="val ok">Active</span></div>
+          <div class="row"><span>Body Size Limit</span><span class="val">1 MB</span></div>
+          <div class="row"><span>Localhost Binding</span><span class="val ok">127.0.0.1</span></div>
+          <div class="row"><span>Slack HMAC</span><span class="val ok">timingSafeEqual</span></div>
+        </div>
+      </div>
     </div>
 
     <!-- Recent Events -->
@@ -203,7 +300,7 @@ document.querySelectorAll('.filter-btn').forEach(btn => {
 // --- Auto-refresh ---
 function startRefresh() {
   stopRefresh();
-  refreshTimer = setInterval(() => { loadStats(); loadEvents(); }, 5000);
+  refreshTimer = setInterval(() => { loadStats(); loadEvents(); loadLoopGuard(); }, 5000);
 }
 function stopRefresh() { if (refreshTimer) clearInterval(refreshTimer); }
 document.getElementById('autoRefresh').addEventListener('change', (e) => {
@@ -338,10 +435,126 @@ document.getElementById('clearBtn').addEventListener('click', async () => {
 // --- Helpers ---
 function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
+// --- Hash-Chain Verification ---
+async function loadChainStatus() {
+  try {
+    const r = await fetch('/api/security/verify-chain', { headers: authHeaders() });
+    const j = await r.json();
+    if (!j.ok) return;
+    const dot = document.getElementById('chainDot');
+    const status = document.getElementById('chainStatus');
+    const total = document.getElementById('chainTotal');
+    const broken = document.getElementById('chainBroken');
+    total.textContent = j.totalChecked;
+    broken.textContent = j.brokenLinks.length;
+    if (j.valid) {
+      dot.className = 'status-dot green';
+      status.className = 'val ok';
+      status.textContent = 'Intact';
+      broken.className = 'val ok';
+    } else {
+      dot.className = 'status-dot red';
+      status.className = 'val fail';
+      status.textContent = 'TAMPERED';
+      broken.className = 'val fail';
+    }
+  } catch {}
+}
+document.getElementById('verifyChainBtn').addEventListener('click', () => {
+  document.getElementById('chainStatus').textContent = 'Verifying...';
+  loadChainStatus();
+});
+
+// --- Loop Guard Stats ---
+async function loadLoopGuard() {
+  try {
+    const r = await fetch('/api/security/loop-guard?sessionId=default', { headers: authHeaders() });
+    const j = await r.json();
+    if (!j.ok) return;
+    document.getElementById('loopTotal').textContent = j.totalCalls;
+    document.getElementById('loopUnique').textContent = j.uniqueCalls;
+    document.getElementById('loopTrips').textContent = j.tripCount;
+    const stateEl = document.getElementById('loopState');
+    const dot = document.getElementById('loopDot');
+    if (j.isTripped) {
+      stateEl.textContent = 'TRIPPED';
+      stateEl.className = 'val fail';
+      dot.className = 'status-dot red';
+    } else if (j.tripCount > 0) {
+      stateEl.textContent = 'Recovered';
+      stateEl.className = 'val warn';
+      dot.className = 'status-dot yellow';
+    } else {
+      stateEl.textContent = 'Closed';
+      stateEl.className = 'val ok';
+      dot.className = 'status-dot green';
+    }
+    const tripsEl = document.getElementById('loopTrips');
+    tripsEl.className = j.tripCount > 0 ? 'val warn' : 'val ok';
+  } catch {}
+}
+
+// --- Ed25519 Public Key ---
+async function loadPublicKey() {
+  try {
+    const r = await fetch('/api/security/public-key');
+    const j = await r.json();
+    const dot = document.getElementById('sigDot');
+    const status = document.getElementById('sigStatus');
+    const display = document.getElementById('pubkeyDisplay');
+    if (j.ok && j.publicKey) {
+      dot.className = 'status-dot green';
+      status.textContent = 'Active';
+      status.className = 'val ok';
+      display.textContent = j.publicKey.trim();
+    } else {
+      dot.className = 'status-dot yellow';
+      status.textContent = 'Not Generated';
+      status.className = 'val warn';
+      display.textContent = 'No keypair found. Restart server to generate.';
+    }
+  } catch {
+    document.getElementById('pubkeyDisplay').textContent = 'Error loading key';
+  }
+}
+
+// --- Verify Headers ---
+document.getElementById('verifyHeadersBtn').addEventListener('click', async () => {
+  try {
+    const r = await fetch('/health');
+    const headers = r.headers;
+    const checks = [
+      ['X-Content-Type-Options', 'nosniff'],
+      ['X-Frame-Options', 'DENY'],
+      ['X-XSS-Protection', '1; mode=block'],
+      ['Referrer-Policy', 'no-referrer'],
+    ];
+    const list = document.getElementById('headersList');
+    let allGood = true;
+    let html = '';
+    for (const [name, expected] of checks) {
+      const actual = headers.get(name);
+      const ok = actual && actual.includes(expected);
+      if (!ok) allGood = false;
+      html += `<li><span class="hdr-name">${esc(name)}:</span> <span style="color:${ok ? '#4ade80' : '#f87171'}">${actual || 'MISSING'}</span></li>`;
+    }
+    const csp = headers.get('Content-Security-Policy');
+    html += `<li><span class="hdr-name">CSP:</span> <span style="color:${csp ? '#4ade80' : '#f87171'}">${csp ? 'active' : 'MISSING'}</span></li>`;
+    if (!csp) allGood = false;
+    list.innerHTML = html;
+    document.getElementById('headersDot').className = 'status-dot ' + (allGood ? 'green' : 'red');
+  } catch {
+    document.getElementById('headersDot').className = 'status-dot red';
+  }
+});
+
 // --- Init ---
 loadStats();
 loadEvents();
 loadPatterns();
+loadChainStatus();
+loadLoopGuard();
+loadPublicKey();
 startRefresh();
 </script>
 </body>
