@@ -19,6 +19,7 @@ import { deleteSkill, isProtected } from "./builder/skillWriter.js";
 import { auditLogger } from "./security/auditLog.js";
 import { exportSkill, importSkill, importFromUrl, listPackages, getPackage, deletePackage } from "./hub/hubManager.js";
 import { getMaskedSecrets, setSkillSecret, deleteSkillSecret, initSkillSecrets, migrateLegacySecrets } from "./security/skillSecrets.js";
+import { getPublicKey, ensureKeypair } from "./security/skillSigning.js";
 import { createServer } from "http";
 import dotenv from "dotenv";
 dotenv.config();
@@ -93,6 +94,23 @@ setInterval(() => {
     else hits.set(ip, active);
   }
 }, 300_000).unref();
+
+// Security headers on every response
+app.use((_req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("X-XSS-Protection", "1; mode=block");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  res.setHeader(
+    "Content-Security-Policy",
+    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:*; font-src 'self'; frame-ancestors 'none'"
+  );
+  if (process.env.ENABLE_HSTS === "true") {
+    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  }
+  next();
+});
 
 // Serve static UI
 app.use("/ui", express.static(path.join(process.cwd(), "public")));
@@ -502,12 +520,30 @@ app.get("/api/security/export", requireAuth, (_req, res) => {
   res.send(auditLogger.exportLog());
 });
 
+app.get("/api/security/verify-chain", requireAuth, (_req, res) => {
+  res.json({ ok: true, ...auditLogger.verifyChain() });
+});
+
 app.post("/api/security/clear", requireAuth, (_req, res) => {
   auditLogger.clearLog();
   res.json({ ok: true });
 });
 
-app.get('/health', (_req, res) => res.json({ ok: true, provider: getProviderName(), discord: isDiscordBotRunning() }));
+// Public key endpoint for skill manifest verification (no auth required for P2P)
+app.get("/api/security/public-key", (_req, res) => {
+  const pubKey = getPublicKey();
+  if (!pubKey) return res.status(404).json({ ok: false, error: "No signing keypair generated yet" });
+  res.json({ ok: true, publicKey: pubKey });
+});
+
+app.get('/health', (req, res) => {
+  // Redact diagnostics unless authenticated
+  const token = req.get("x-api-token");
+  if (API_TOKEN && token !== API_TOKEN) {
+    return res.json({ ok: true });
+  }
+  res.json({ ok: true, provider: getProviderName(), discord: isDiscordBotRunning() });
+});
 
 // Create HTTP server shared by Express and WebSocket
 const server = createServer(app);
@@ -527,6 +563,9 @@ startDiscordBot(skills, () => getProviderKey());
 // Initialize encrypted skill secrets cache + migrate legacy plaintext if present
 migrateLegacySecrets();
 initSkillSecrets();
+
+// Ensure Ed25519 signing keypair exists
+ensureKeypair();
 
 // Clean expired sessions every hour
 setInterval(() => cleanExpiredSessions(), 3_600_000).unref();

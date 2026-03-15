@@ -1,5 +1,5 @@
 import { appendFileSync, readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
-import { randomUUID } from "crypto";
+import { randomUUID, createHash } from "crypto";
 import path from "path";
 import { BLOCKED_PATTERNS } from "./safetySpine.js";
 
@@ -23,6 +23,10 @@ export interface AuditEvent {
   durationMs?: number;
   success?: boolean;
   error?: string;
+  /** SHA-256 hash of the previous event — forms a tamper-evident chain */
+  prevHash?: string;
+  /** SHA-256 hash of this event (computed over all fields except hash itself) */
+  hash?: string;
 }
 
 export type ThreatLevel = "low" | "medium" | "high" | "critical";
@@ -58,9 +62,16 @@ function sanitizeArgs(args: Record<string, unknown>): Record<string, unknown> {
   return clean;
 }
 
+/** Compute SHA-256 hash of an event (excluding the hash field itself) */
+function hashEvent(event: AuditEvent): string {
+  const { hash: _h, ...rest } = event;
+  return createHash("sha256").update(JSON.stringify(rest)).digest("hex");
+}
+
 class AuditLogger {
   private buffer: AuditEvent[] = [];
   private patternHits = new Map<number, number>();
+  private lastHash: string = "GENESIS";
 
   constructor() {
     this.loadExisting();
@@ -75,6 +86,7 @@ class AuditLogger {
         try {
           const evt: AuditEvent = JSON.parse(line);
           this.buffer.push(evt);
+          if (evt.hash) this.lastHash = evt.hash;
           if (evt.type === "block" && evt.patternIndex != null) {
             this.patternHits.set(evt.patternIndex, (this.patternHits.get(evt.patternIndex) ?? 0) + 1);
           }
@@ -85,6 +97,7 @@ class AuditLogger {
         for (const line of lines.slice(0, -BUFFER_SIZE)) {
           try {
             const evt: AuditEvent = JSON.parse(line);
+            if (evt.hash) this.lastHash = evt.hash;
             if (evt.type === "block" && evt.patternIndex != null) {
               this.patternHits.set(evt.patternIndex, (this.patternHits.get(evt.patternIndex) ?? 0) + 1);
             }
@@ -95,6 +108,11 @@ class AuditLogger {
   }
 
   private append(event: AuditEvent): void {
+    // Hash-chain: link this event to the previous one
+    event.prevHash = this.lastHash;
+    event.hash = hashEvent(event);
+    this.lastHash = event.hash;
+
     this.buffer.push(event);
     if (this.buffer.length > BUFFER_SIZE) {
       this.buffer = this.buffer.slice(-BUFFER_SIZE);
@@ -211,6 +229,36 @@ class AuditLogger {
     }));
   }
 
+  /** Verify the hash chain integrity. Returns broken links if tampered. */
+  verifyChain(): { valid: boolean; totalChecked: number; brokenLinks: number[] } {
+    if (!existsSync(AUDIT_FILE)) return { valid: true, totalChecked: 0, brokenLinks: [] };
+    const lines = readFileSync(AUDIT_FILE, "utf8").trim().split("\n").filter(Boolean);
+    let prevHash = "GENESIS";
+    const brokenLinks: number[] = [];
+
+    for (let i = 0; i < lines.length; i++) {
+      try {
+        const evt: AuditEvent = JSON.parse(lines[i]);
+        // Skip legacy events without hash chain
+        if (!evt.hash) continue;
+        // Verify prevHash links to actual previous
+        if (evt.prevHash && evt.prevHash !== prevHash) {
+          brokenLinks.push(i);
+        }
+        // Verify event hash is correct
+        const computed = hashEvent(evt);
+        if (computed !== evt.hash) {
+          brokenLinks.push(i);
+        }
+        prevHash = evt.hash;
+      } catch {
+        brokenLinks.push(i);
+      }
+    }
+
+    return { valid: brokenLinks.length === 0, totalChecked: lines.length, brokenLinks };
+  }
+
   exportLog(): string {
     if (!existsSync(AUDIT_FILE)) return "";
     return readFileSync(AUDIT_FILE, "utf8");
@@ -219,6 +267,7 @@ class AuditLogger {
   clearLog(): void {
     this.buffer = [];
     this.patternHits.clear();
+    this.lastHash = "GENESIS";
     if (existsSync(AUDIT_FILE)) {
       writeFileSync(AUDIT_FILE, "", "utf8");
     }

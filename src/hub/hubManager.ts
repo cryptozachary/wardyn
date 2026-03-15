@@ -8,6 +8,8 @@ import { validate } from "../builder/validator.js";
 import { smokeTest } from "../builder/smokeTest.js";
 import { loadSkills } from "../skills/loader.js";
 import type { BuilderResult } from "../builder/types.js";
+import { checkSSRF } from "../security/ssrfGuard.js";
+import { createSignedManifest, verifySkillCode } from "../security/skillSigning.js";
 
 const HUB_DIR = path.join(process.cwd(), "hub");
 const REGISTRY_FILE = path.join(HUB_DIR, "registry.json");
@@ -80,6 +82,9 @@ export function exportSkill(skillName: string, author: string, version = "1.0.0"
   const exportedAt = new Date().toISOString();
   const fileName = `${name}-${version}.claw`;
 
+  // Sign the skill manifest with Ed25519
+  const signed = createSignedManifest(name, version, language, code, author);
+
   const pkg: ClawPackage = {
     formatVersion: 1,
     name,
@@ -93,6 +98,7 @@ export function exportSkill(skillName: string, author: string, version = "1.0.0"
     author,
     exportedAt,
     checksum,
+    signedManifest: signed,
   };
 
   // Write .claw file
@@ -129,7 +135,15 @@ export async function importSkill(
   // Verify checksum
   const expected = computeChecksum(pkg.code);
   if (pkg.checksum && pkg.checksum !== expected) {
-    return { success: false, error: "Checksum mismatch — package may be corrupted" };
+    return { success: false, error: "Checksum mismatch -- package may be corrupted" };
+  }
+
+  // Verify Ed25519 signature if present
+  if (pkg.signedManifest) {
+    const sigResult = verifySkillCode(pkg.signedManifest, pkg.code);
+    if (!sigResult.valid) {
+      return { success: false, error: `Signature verification failed: ${sigResult.reason}` };
+    }
   }
 
   // Safety check
@@ -185,6 +199,12 @@ export async function importFromUrl(
   url: string,
   runSmokeTestFlag = false
 ): Promise<{ success: boolean; error?: string }> {
+  // SSRF protection: validate URL before fetching
+  const ssrf = await checkSSRF(url);
+  if (!ssrf.allowed) {
+    return { success: false, error: `SSRF blocked: ${ssrf.reason}` };
+  }
+
   try {
     const res = await fetch(url);
     if (!res.ok) return { success: false, error: `HTTP ${res.status}: ${res.statusText}` };

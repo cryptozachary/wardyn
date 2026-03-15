@@ -1,7 +1,7 @@
 [
   {
     "name": "BTC Price Check",
-    "cron": "every 180m",
+    "cron": "every 60m",
     "prompt": "Give brief update on bitcoin price and price action.",
     "enabled": true,
     "mode": "fixed"
@@ -21,5 +21,13 @@
     "enabled": false,
     "mode": "smart",
     "scanWindowMs": 86400000
+  },
+  {
+    "name": "crypto-trade-scanner",
+    "cron": "every 240m",
+    "prompt": "You are a crypto trade analyst. Use market_scanner_skill to scan BTC/USDT, ETH/USDT, and SOL/USDT for technical signals (RSI, MACD, volume). For any coin showing a strong setup, use sentiment_skill to check fear & greed index and trending sentiment. If both technicals and sentiment align, use risk_calculator_skill to calculate position size assuming $10,000 account balance and 2% risk per trade. Only report if a high-confidence trade setup is found — do not generate noise.",
+    "enabled": true,
+    "mode": "smart",
+    "scanWindowMs": 900000
   }
 ]

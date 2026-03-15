@@ -12,6 +12,8 @@ export interface ClawPackage {
   author: string;
   exportedAt: string;
   checksum: string;
+  /** Ed25519 signed manifest (optional, added on export) */
+  signedManifest?: import("../security/skillSigning.js").SignedManifest;
 }
 
 export interface HubRegistryEntry {

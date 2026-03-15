@@ -4,6 +4,7 @@ import path from "path";
 import { callLLM } from "../llm/router.js";
 import { checkSafe } from "../security/safetySpine.js";
 import { auditLogger } from "../security/auditLog.js";
+import { checkLoop } from "../security/loopGuard.js";
 import {
   Session, SessionMessage,
   getOrCreateSession, appendToSession, compactIfNeeded, saveSession
@@ -126,11 +127,17 @@ export async function runAgentLoop(
       if (!skill?.execute) {
         error = "Tool not found";
       } else {
-        try {
-          validateArgs(parsed.args, msg.channel, sid);
-          output = await skill.execute(parsed.args, msg);
-        } catch (err: any) {
-          error = err.message;
+        // Loop guard: detect repeated identical calls
+        const loopCheck = checkLoop(sid, parsed.name, parsed.args);
+        if (!loopCheck.allowed) {
+          error = `Loop guard: ${loopCheck.reason}`;
+        } else {
+          try {
+            validateArgs(parsed.args, msg.channel, sid);
+            output = await skill.execute(parsed.args, msg);
+          } catch (err: any) {
+            error = err.message;
+          }
         }
       }
 
