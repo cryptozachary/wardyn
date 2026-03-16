@@ -3,7 +3,7 @@
     "name": "BTC Price Check",
     "cron": "every 60m",
     "prompt": "Give brief update on bitcoin price and price action.",
-    "enabled": true,
+    "enabled": false,
     "mode": "fixed"
   },
   {
@@ -25,9 +25,33 @@
   {
     "name": "crypto-trade-scanner",
     "cron": "every 240m",
-    "prompt": "You are a crypto trade analyst. Use market_scanner_skill to scan BTC/USDT, ETH/USDT, and SOL/USDT for technical signals (RSI, MACD, volume). For any coin showing a strong setup, use sentiment_skill to check fear & greed index and trending sentiment. If both technicals and sentiment align, use risk_calculator_skill to calculate position size assuming $10,000 account balance and 2% risk per trade. Only report if a high-confidence trade setup is found — do not generate noise.",
-    "enabled": true,
+    "prompt": "You are a crypto trade analyst. Use market_scanner_skill to scan BTC/USDT, ETH/USDT, and SOL/USDT for technical signals (RSI, MACD, volume). For any coin showing a strong setup, use sentiment_skill to check fear and greed index and trending sentiment. If both technicals and sentiment align, use risk_calculator_skill to calculate position size assuming a 10000 USD account balance and 2% risk per trade. Only report if a high-confidence trade setup is found and do not generate noise.",
+    "enabled": false,
     "mode": "smart",
     "scanWindowMs": 900000
+  },
+  {
+    "name": "signal-fusion-trader",
+    "cron": "every 60m",
+    "prompt": "You are Signal Fusion Trader. Goal: find only high-confidence setups on BTC/USDT, ETH/USDT, and SOL/USDT. Steps: 1) Use market_scanner_skill scan with strategies oversold, momentum, and trend_reversal on intervals 1h and 1d. 2) Validate candidates with sentiment_skill coin_sentiment and market_overview. 3) For aligned setups, compute risk plans with risk_calculator_skill risk_reward and position_size using accountSize=10000 and riskPercent=2. 4) Only approve setups with clear entry, stopLoss, takeProfit, and risk-reward >= 1.8. 5) Save the final report to output/signal_fusion_latest.json using filesystem_skill. If no high-confidence setup exists, do not generate noise.",
+    "enabled": true,
+    "mode": "smart",
+    "scanWindowMs": 3600000
+  },
+  {
+    "name": "portfolio-risk-guardian",
+    "cron": "every 30m",
+    "prompt": "You are Portfolio Risk Guardian. Goal: continuously audit open positions and detect risk drift. Steps: 1) Use portfolio_skill list to load open positions. 2) For each position, get latest price context with exchange_data_skill ticker. 3) Recompute quality with risk_calculator_skill risk_reward and breakeven. 4) Flag positions that have missing stopLoss/takeProfit, risk-reward below 1.2, or excessive combined portfolio risk (assume accountSize=10000 unless specified). 5) Write findings to output/portfolio_risk_alerts.json using filesystem_skill, and only produce a user-facing summary when critical issues are found.",
+    "enabled": false,
+    "mode": "smart",
+    "scanWindowMs": 7200000
+  },
+  {
+    "name": "incident-triage-agent",
+    "cron": "every 15m",
+    "prompt": "You are Incident Triage Agent. Goal: detect recurring tool and automation failures early. Steps: 1) Read logs/audit.jsonl and recent logs/*.log using filesystem_skill. 2) Identify repeated failures from the last 2 hours grouped by tool and error text. 3) Produce top issues with count, firstSeen, lastSeen, and likely cause. 4) Write a machine-readable report to output/incident_triage_latest.json using filesystem_skill. 5) If any issue repeats 3+ times, mark severity high and include one concrete remediation action.",
+    "enabled": false,
+    "mode": "smart",
+    "scanWindowMs": 7200000
   }
 ]
