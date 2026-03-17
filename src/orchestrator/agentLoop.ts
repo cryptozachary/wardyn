@@ -150,7 +150,9 @@ export async function runAgentLoop(
           } else {
             try {
               validateArgs(parsed.args, msg.channel, sid);
-              output = await skill.execute(parsed.args, msg);
+              // Inject caller context so skills can detect autonomous execution
+              const argsWithContext = { ...parsed.args, _caller: msg.channel, _channel: msg.channel };
+              output = await skill.execute(argsWithContext, msg);
             } catch (err: any) {
               error = err.message;
             }

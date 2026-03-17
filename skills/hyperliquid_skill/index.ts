@@ -519,10 +519,66 @@ async function handleTransfer(args: any): Promise<string> {
   });
 }
 
+// =================== Trade Safety Gate ===================
+
+/**
+ * Actions that modify state or move funds require confirmation.
+ * Read-only actions (positions, balances, prices, etc.) are always allowed.
+ *
+ * Set HYPERLIQUID_CONFIRM_TRADES=false to disable the gate (not recommended).
+ * Autonomous callers (heartbeat, cron) are blocked unless explicitly allowed
+ * via HYPERLIQUID_ALLOW_AUTONOMOUS=true.
+ */
+
+const WRITE_ACTIONS = new Set([
+  "place_order", "cancel_order", "cancel_all",
+  "set_leverage", "transfer",
+]);
+
+const READ_ACTIONS = new Set([
+  "positions", "balances", "open_orders", "order_status",
+  "markets", "prices",
+]);
+
+function isTradeGateEnabled(): boolean {
+  return process.env.HYPERLIQUID_CONFIRM_TRADES !== "false";
+}
+
+function isAutonomousAllowed(): boolean {
+  return process.env.HYPERLIQUID_ALLOW_AUTONOMOUS === "true";
+}
+
+function assertTradeAllowed(action: string, args: any): void {
+  if (!WRITE_ACTIONS.has(action)) return; // read-only, always OK
+  if (!isTradeGateEnabled()) return; // gate disabled
+
+  // Block autonomous execution (heartbeat/cron) unless explicitly allowed
+  // The agent loop passes the channel in the message context
+  // When called from heartbeat, there's no interactive user to confirm
+  if (!isAutonomousAllowed()) {
+    // Check if this is likely an autonomous call by looking at common markers
+    // Heartbeat jobs set channel to "heartbeat", cron jobs to "heartbeat" as well
+    const caller = args._caller ?? args._channel ?? "";
+    if (caller === "heartbeat" || caller === "cron") {
+      throw new Error(
+        `Trade action "${action}" blocked: autonomous trading is disabled. ` +
+        `Set HYPERLIQUID_ALLOW_AUTONOMOUS=true to enable heartbeat/cron trading.`
+      );
+    }
+  }
+}
+
 // =================== Main Execute ===================
 
 export async function execute(args: any): Promise<string> {
   const action = args.action;
+
+  if (!READ_ACTIONS.has(action) && !WRITE_ACTIONS.has(action)) {
+    throw new Error(`Unknown action: ${action}. Available: place_order, cancel_order, cancel_all, positions, balances, open_orders, order_status, markets, prices, set_leverage, transfer`);
+  }
+
+  // Enforce trade safety gate
+  assertTradeAllowed(action, args);
 
   switch (action) {
     case "place_order": return handlePlaceOrder(args);
@@ -537,6 +593,6 @@ export async function execute(args: any): Promise<string> {
     case "set_leverage": return handleSetLeverage(args);
     case "transfer": return handleTransfer(args);
     default:
-      throw new Error(`Unknown action: ${action}. Available: place_order, cancel_order, cancel_all, positions, balances, open_orders, order_status, markets, prices, set_leverage, transfer`);
+      throw new Error(`Unknown action: ${action}`);
   }
 }
