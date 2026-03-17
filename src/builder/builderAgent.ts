@@ -1,5 +1,6 @@
 import { callLLM } from "../llm/router.js";
 import { assertSafe } from "../security/safetySpine.js";
+import { assertCodeSafe } from "../security/astAnalyzer.js";
 import { sanitizeName, skillExists, isProtected, writeSkill } from "./skillWriter.js";
 import { validate } from "./validator.js";
 import { smokeTest } from "./smokeTest.js";
@@ -294,8 +295,13 @@ Use these EXACT key names as your skill's parameter names so they map directly. 
     throw new Error(`Cannot overwrite protected skill: ${sanitized}`);
   }
 
-  // Safety check on generated code
+  // Safety check on generated code — regex + AST
   assertSafe(code);
+  const astResult = await assertCodeSafe(code, language);
+  if (!astResult.safe) {
+    const reasons = astResult.blockers.map(b => b.description).join("; ");
+    throw new Error(`AST analysis blocked: ${reasons}`);
+  }
 
   // Generate wrapper for non-TS languages
   let wrapperCode: string | undefined;
@@ -390,6 +396,11 @@ Fix the code to resolve this error. Return the corrected skill in the same JSON 
 
   const sanitized = sanitizeName(name || "");
   assertSafe(code);
+  const astCheck = await assertCodeSafe(code, language);
+  if (!astCheck.safe) {
+    const reasons = astCheck.blockers.map(b => b.description).join("; ");
+    throw new Error(`AST analysis blocked (retry): ${reasons}`);
+  }
 
   let wrapperCode: string | undefined;
   if (language !== "typescript") {

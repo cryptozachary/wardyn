@@ -4,6 +4,7 @@ import path from "path";
 import type { ClawPackage, HubRegistry, HubRegistryEntry } from "./hubTypes.js";
 import { writeSkill, deleteSkill, isProtected, skillExists, sanitizeName } from "../builder/skillWriter.js";
 import { assertSafe } from "../security/safetySpine.js";
+import { assertCodeSafe } from "../security/astAnalyzer.js";
 import { validate } from "../builder/validator.js";
 import { smokeTest } from "../builder/smokeTest.js";
 import { loadSkills } from "../skills/loader.js";
@@ -146,12 +147,26 @@ export async function importSkill(
     }
   }
 
-  // Safety check
+  // Safety check — regex + AST analysis
   try {
     assertSafe(pkg.code);
     if (pkg.wrapperCode) assertSafe(pkg.wrapperCode);
   } catch (err: any) {
     return { success: false, error: err.message };
+  }
+
+  // AST-level deep analysis
+  const astResult = await assertCodeSafe(pkg.code, pkg.language);
+  if (!astResult.safe) {
+    const reasons = astResult.blockers.map(b => b.description).join("; ");
+    return { success: false, error: `AST analysis blocked: ${reasons}` };
+  }
+  if (pkg.wrapperCode) {
+    const wrapperAst = await assertCodeSafe(pkg.wrapperCode, "typescript");
+    if (!wrapperAst.safe) {
+      const reasons = wrapperAst.blockers.map(b => b.description).join("; ");
+      return { success: false, error: `AST analysis blocked (wrapper): ${reasons}` };
+    }
   }
 
   // Build a BuilderResult to reuse writeSkill

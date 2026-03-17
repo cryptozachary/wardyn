@@ -24,6 +24,8 @@ import { getLoopGuardStats } from "./security/loopGuard.js";
 import { ZeroizingCache } from "./security/zeroize.js";
 import { safeStatic } from "./security/pathGuard.js";
 import { getAllQuotas, getQuotaStatus } from "./security/quotaTracker.js";
+import { submitForApproval, approveSkill, rejectSkill, listApprovals, getApproval, isApprovalRequired } from "./security/approvalQueue.js";
+import { assertCodeSafe } from "./security/astAnalyzer.js";
 import { createServer } from "http";
 import dotenv from "dotenv";
 dotenv.config();
@@ -258,6 +260,22 @@ app.post("/api/skills/build", rateLimit, requireAuth, async (req, res) => {
     }
 
     if (result.success) {
+      // If approval queue is enabled, route through approval instead of direct activation
+      if (isApprovalRequired()) {
+        // Run AST analysis for the approval review
+        const astResult = await assertCodeSafe(result.code, result.language);
+        // Delete the skill that buildSkill() already wrote (it'll be re-installed on approval)
+        try { deleteSkill(result.name); } catch {}
+        const approval = submitForApproval(result, "build", astResult.warnings);
+        return res.json({
+          ok: true,
+          requiresApproval: true,
+          approvalId: approval.id,
+          skillName: result.name,
+          astWarnings: astResult.warnings,
+          skill: result,
+        });
+      }
       reloadSkills();
     }
     res.json({ ok: result.success, skill: result });
@@ -297,9 +315,27 @@ app.post("/api/hub/export", requireAuth, (req, res) => {
 });
 
 app.post("/api/hub/import", requireAuth, async (req, res) => {
-  const smokeTest = req.query.smokeTest === "true";
+  const smokeTestFlag = req.query.smokeTest === "true";
   try {
-    const result = await importSkill(req.body, smokeTest);
+    // If approval required, validate but don't install — route to queue
+    if (isApprovalRequired() && req.body?.code) {
+      const pkg = req.body;
+      const astResult = await assertCodeSafe(pkg.code, pkg.language || "typescript");
+      const builderResult = {
+        name: pkg.name, language: pkg.language || "typescript",
+        description: pkg.description || pkg.name, parameters: pkg.parameters || {},
+        secrets: undefined, code: pkg.code, wrapperCode: pkg.wrapperCode,
+        skillMd: pkg.skillMd || pkg.description || pkg.name,
+        validationOutput: "", success: true, attempts: 1, sampleArgs: pkg.sampleArgs,
+      };
+      const approval = submitForApproval(builderResult, "import", astResult.warnings, pkg.author);
+      return res.json({
+        ok: true, requiresApproval: true,
+        approvalId: approval.id, skillName: pkg.name,
+        astWarnings: astResult.warnings,
+      });
+    }
+    const result = await importSkill(req.body, smokeTestFlag);
     if (result.success) reloadSkills();
     res.json({ ok: result.success, error: result.error });
   } catch (err: any) {
@@ -332,6 +368,34 @@ app.delete("/api/hub/packages/:name", requireAuth, (req, res) => {
   } catch (err: any) {
     res.status(400).json({ ok: false, error: err.message });
   }
+});
+
+// --- Skill Approval Queue endpoints ---
+app.get("/api/approvals", requireAuth, (req, res) => {
+  const status = req.query.status as "pending" | "approved" | "rejected" | undefined;
+  res.json({ ok: true, approvals: listApprovals(status) });
+});
+
+app.get("/api/approvals/:id", requireAuth, (req, res) => {
+  const approval = getApproval(req.params.id);
+  if (!approval) return res.status(404).json({ ok: false, error: "Approval not found" });
+  res.json({ ok: true, approval });
+});
+
+app.post("/api/approvals/:id/approve", requireAuth, (req, res) => {
+  const result = approveSkill(req.params.id);
+  if (result.ok) reloadSkills();
+  res.json(result);
+});
+
+app.post("/api/approvals/:id/reject", requireAuth, (req, res) => {
+  const { reason } = req.body || {};
+  const result = rejectSkill(req.params.id, reason);
+  res.json(result);
+});
+
+app.get("/api/approvals/config/status", requireAuth, (_req, res) => {
+  res.json({ ok: true, approvalRequired: isApprovalRequired() });
 });
 
 // --- Skill Secrets endpoints ---

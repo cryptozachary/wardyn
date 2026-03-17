@@ -261,6 +261,130 @@ async function run() {
     assert.ok(s.resetInMs > 0);
   });
 
+  // ========== AST Analyzer ==========
+  section("AST Analyzer");
+
+  const { analyzeTypeScript, analyzeGo, analyzeCpp, assertCodeSafe } = await import("../src/security/astAnalyzer.js");
+
+  test("blocks child_process import", () => {
+    const warnings = analyzeTypeScript('import { exec } from "child_process";');
+    assert.ok(warnings.some(w => w.severity === "block" && w.type === "blocked_import"));
+  });
+
+  test("blocks require('child_process')", () => {
+    const warnings = analyzeTypeScript('const cp = require("child_process");');
+    assert.ok(warnings.some(w => w.severity === "block" && w.type === "blocked_require"));
+  });
+
+  test("blocks eval() calls", () => {
+    const warnings = analyzeTypeScript('const x = eval("1+1");');
+    assert.ok(warnings.some(w => w.severity === "block" && w.type === "eval"));
+  });
+
+  test("blocks new Function()", () => {
+    const warnings = analyzeTypeScript('const fn = new Function("return 1");');
+    assert.ok(warnings.some(w => w.severity === "block" && w.type === "function_constructor"));
+  });
+
+  test("blocks dynamic require", () => {
+    const warnings = analyzeTypeScript('const mod = require(userInput);');
+    assert.ok(warnings.some(w => w.severity === "block" && w.type === "dynamic_require"));
+  });
+
+  test("warns on fs import", () => {
+    const warnings = analyzeTypeScript('import { readFileSync } from "fs";');
+    assert.ok(warnings.some(w => w.severity === "warn" && w.description.includes("fs")));
+  });
+
+  test("allows safe TypeScript code", () => {
+    const warnings = analyzeTypeScript(`
+      export const parameters = { type: "object", properties: {} };
+      export async function execute(args: any): Promise<string> {
+        const x = args.input;
+        return x.toUpperCase();
+      }
+    `);
+    const blockers = warnings.filter(w => w.severity === "block");
+    assert.strictEqual(blockers.length, 0);
+  });
+
+  test("blocks Go os/exec import", () => {
+    const warnings = analyzeGo('import "os/exec"');
+    assert.ok(warnings.some(w => w.severity === "block"));
+  });
+
+  test("blocks Go syscall import", () => {
+    const warnings = analyzeGo('import "syscall"');
+    assert.ok(warnings.some(w => w.severity === "block"));
+  });
+
+  test("blocks C++ system() call", () => {
+    const warnings = analyzeCpp('int r = system("ls");');
+    assert.ok(warnings.some(w => w.severity === "block" && w.description.includes("system()")));
+  });
+
+  test("blocks C++ fork()", () => {
+    const warnings = analyzeCpp('pid_t pid = fork();');
+    assert.ok(warnings.some(w => w.severity === "block" && w.description.includes("fork()")));
+  });
+
+  await test("assertCodeSafe returns safe for clean code", async () => {
+    const result = await assertCodeSafe('const x = 1 + 2;', 'typescript');
+    assert.strictEqual(result.safe, true);
+    assert.strictEqual(result.blockers.length, 0);
+  });
+
+  await test("assertCodeSafe blocks dangerous code", async () => {
+    const result = await assertCodeSafe('import { exec } from "child_process"; exec("rm -rf /");', 'typescript');
+    assert.strictEqual(result.safe, false);
+    assert.ok(result.blockers.length > 0);
+  });
+
+  // ========== Approval Queue ==========
+  section("Approval Queue");
+
+  const { submitForApproval, listApprovals, approveSkill, rejectSkill, getApproval } = await import("../src/security/approvalQueue.js");
+
+  test("submit and list pending approval", () => {
+    const result = {
+      name: "test_approval_skill",
+      language: "typescript",
+      description: "test skill",
+      parameters: {},
+      code: 'export async function execute() { return "hi"; }',
+      skillMd: "test",
+      validationOutput: "",
+      success: true,
+      attempts: 1,
+    };
+    const approval = submitForApproval(result, "build", []);
+    assert.ok(approval.id);
+    assert.strictEqual(approval.status, "pending");
+
+    const pending = listApprovals("pending");
+    assert.ok(pending.some(a => a.id === approval.id));
+  });
+
+  test("reject a pending approval", () => {
+    const pending = listApprovals("pending");
+    const testApproval = pending.find(a => a.skillName === "test_approval_skill");
+    assert.ok(testApproval, "Should find the test approval");
+
+    const result = rejectSkill(testApproval!.id, "test rejection");
+    assert.strictEqual(result.ok, true);
+
+    const rejected = getApproval(testApproval!.id);
+    assert.strictEqual(rejected!.status, "rejected");
+    assert.strictEqual(rejected!.rejectReason, "test rejection");
+  });
+
+  test("cannot reject already-rejected approval", () => {
+    const rejected = listApprovals("rejected");
+    const testApproval = rejected.find(a => a.skillName === "test_approval_skill");
+    const result = rejectSkill(testApproval!.id);
+    assert.strictEqual(result.ok, false);
+  });
+
   // ========== Skill Writer Protection ==========
   section("SkillWriter Protection");
 

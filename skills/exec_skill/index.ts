@@ -2,6 +2,7 @@ import { spawn } from "child_process";
 import path from "path";
 import { mkdirSync, existsSync, writeFileSync, unlinkSync } from "fs";
 import { assertSafe } from "../../src/security/safetySpine.js";
+import { analyzeTypeScript } from "../../src/security/astAnalyzer.js";
 
 const SANDBOX_DIR = path.join(process.cwd(), "sandbox");
 const TIMEOUT_MS = 15_000;
@@ -49,22 +50,32 @@ export async function execute(args: any): Promise<string> {
     throw new Error(`Interpreter "${interpreter}" not allowed. Use: ${Object.keys(ALLOWED_INTERPRETERS).join(", ")}`);
   }
 
-  // SafetySpine validation (also done by agentLoop, but double-check here)
+  // SafetySpine regex validation (also done by agentLoop, but double-check here)
   assertSafe(command);
 
   // Additional exec-specific blocks
   validateExecCommand(command, interpreter);
+
+  // AST-level analysis for Node.js code — catches obfuscated dangerous patterns
+  if (interpreter === "node") {
+    const astWarnings = analyzeTypeScript(command);
+    const blockers = astWarnings.filter(w => w.severity === "block");
+    if (blockers.length > 0) {
+      const reasons = blockers.map(b => `${b.location ?? ""}: ${b.description}`).join("; ");
+      throw new Error(`AST analysis blocked execution: ${reasons}`);
+    }
+  }
 
   // Ensure sandbox exists
   if (!existsSync(SANDBOX_DIR)) {
     mkdirSync(SANDBOX_DIR, { recursive: true });
   }
 
-  // For node/python, write code to a temp file and execute it to avoid shell injection
   const effectiveTimeout = Math.min(timeout ?? TIMEOUT_MS, 30_000);
 
+  // For node/python, write code to a temp file to avoid shell injection
   if (interpreter === "node" || interpreter === "python" || interpreter === "python3") {
-    return runCode(interp[0], command, effectiveTimeout);
+    return runCode(interp[0], command, effectiveTimeout, interpreter);
   }
 
   return runShell(interp, command, effectiveTimeout);
@@ -93,14 +104,18 @@ function validateExecCommand(command: string, interpreter: string) {
   }
 }
 
-function runCode(interpreter: string, code: string, timeout: number): Promise<string> {
+function runCode(interpreter: string, code: string, timeout: number, interpName: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    // Write to a temp file to avoid shell metacharacter issues
-    const ext = interpreter === "node" ? ".js" : ".py";
+    const ext = interpName === "node" ? ".js" : ".py";
     const tmpFile = path.join(SANDBOX_DIR, `_exec_tmp_${Date.now()}${ext}`);
     writeFileSync(tmpFile, code, "utf8");
 
-    const proc = spawn(interpreter, [tmpFile], {
+    // For Python, use -I (isolated) and -S (no site) flags for extra safety
+    const args = interpName === "node"
+      ? [tmpFile]
+      : ["-I", "-S", tmpFile];
+
+    const proc = spawn(interpreter, args, {
       cwd: SANDBOX_DIR,
       timeout,
       env: { ...minimalEnv(), HOME: SANDBOX_DIR, TMPDIR: SANDBOX_DIR },
@@ -113,12 +128,9 @@ function runCode(interpreter: string, code: string, timeout: number): Promise<st
     proc.stdout.on("data", (d: Buffer) => { stdout += d.toString(); });
     proc.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
 
-    proc.on("close", (code) => {
-      // Clean up temp file
+    proc.on("close", (exitCode) => {
       try { unlinkSync(tmpFile); } catch {}
-
-      const out = formatOutput(stdout, stderr, code);
-      resolve(out);
+      resolve(formatOutput(stdout, stderr, exitCode));
     });
 
     proc.on("error", (err) => {
