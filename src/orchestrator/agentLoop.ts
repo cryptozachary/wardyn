@@ -5,6 +5,7 @@ import { callLLM } from "../llm/router.js";
 import { checkSafe } from "../security/safetySpine.js";
 import { auditLogger } from "../security/auditLog.js";
 import { checkLoop } from "../security/loopGuard.js";
+import { checkLLMQuota, checkSkillQuota } from "../security/quotaTracker.js";
 import {
   Session, SessionMessage,
   getOrCreateSession, appendToSession, compactIfNeeded, saveSession
@@ -88,6 +89,16 @@ export async function runAgentLoop(
   let iterations = 0;
 
   while (iterations++ < 12) {
+    // Per-user LLM quota check
+    const quota = checkLLMQuota(msg.userId);
+    if (!quota.allowed) {
+      const mins = Math.ceil(quota.resetInMs / 60_000);
+      const finalText = `Rate limit reached. You have used all ${100} LLM calls this hour. Resets in ~${mins} minutes.`;
+      appendToSession(session, { role: "assistant", content: finalText, ts: Date.now() });
+      saveSession(session);
+      return { final: finalText, toolResults, sessionId: sid };
+    }
+
     onStream?.({ type: "thinking", iteration: iterations });
 
     const llmResponse = await callLLM({ messages, tools: toolDefs }, providerKey);
@@ -127,16 +138,22 @@ export async function runAgentLoop(
       if (!skill?.execute) {
         error = "Tool not found";
       } else {
-        // Loop guard: detect repeated identical calls
-        const loopCheck = checkLoop(sid, parsed.name, parsed.args);
-        if (!loopCheck.allowed) {
-          error = `Loop guard: ${loopCheck.reason}`;
+        // Per-user skill quota check (expensive skills only)
+        const skillQuota = checkSkillQuota(msg.userId, parsed.name);
+        if (!skillQuota.allowed) {
+          error = `Quota exceeded: ${parsed.name} is rate-limited (${skillQuota.remaining} remaining this hour)`;
         } else {
-          try {
-            validateArgs(parsed.args, msg.channel, sid);
-            output = await skill.execute(parsed.args, msg);
-          } catch (err: any) {
-            error = err.message;
+          // Loop guard: detect repeated identical calls
+          const loopCheck = checkLoop(sid, parsed.name, parsed.args);
+          if (!loopCheck.allowed) {
+            error = `Loop guard: ${loopCheck.reason}`;
+          } else {
+            try {
+              validateArgs(parsed.args, msg.channel, sid);
+              output = await skill.execute(parsed.args, msg);
+            } catch (err: any) {
+              error = err.message;
+            }
           }
         }
       }

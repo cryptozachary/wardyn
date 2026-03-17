@@ -11,6 +11,8 @@ const PROTECTED_SKILLS = new Set([
   "filesystem_skill",
   "browser_skill",
   "web_fetch_skill",
+  "code_runner_skill",
+  "database_skill",
 ]);
 
 const LANGUAGE_FILES: Record<string, string> = {

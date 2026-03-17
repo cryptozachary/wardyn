@@ -14,6 +14,12 @@ const providers: Record<string, LLMProvider> = {
 const ENV_PROVIDER = process.env.LLM_PROVIDER || "openai";
 const PROVIDER_CONFIG_PATH = path.join(process.cwd(), "config", "provider.json");
 
+// Fallback order: try primary, then each fallback in sequence
+const FALLBACK_ORDER: string[] = (process.env.LLM_FALLBACK_ORDER || "openai,anthropic,ollama")
+  .split(",")
+  .map(s => s.trim())
+  .filter(s => providers[s]);
+
 export function getProviderName(): string {
   // Config file takes priority over env var
   if (existsSync(PROVIDER_CONFIG_PATH)) {
@@ -39,17 +45,93 @@ export function getProvider(name?: string): LLMProvider {
   return provider;
 }
 
+/**
+ * Call LLM with automatic fallback routing.
+ * If the primary provider fails, tries each fallback provider in order.
+ * Logs which provider was used on fallback.
+ */
 export async function callLLM(payload: CallPayload, apiKey: string, providerName?: string): Promise<LLMResponse> {
-  const provider = getProvider(providerName);
+  const primaryName = providerName || getProviderName();
+  const provider = providers[primaryName];
+  if (!provider) throw new Error(`Unknown LLM provider: "${primaryName}"`);
+
+  // Try primary provider first
   try {
     return await provider.callLLM(payload, apiKey);
-  } catch (err: any) {
-    const msg = err.response?.data?.error?.message
-      || err.response?.data?.error?.type
-      || err.message
-      || "LLM call failed";
-    throw new Error(`[${provider.name}] ${msg}`);
+  } catch (primaryErr: any) {
+    // If a specific provider was requested, don't fallback
+    if (providerName) {
+      throw formatError(provider.name, primaryErr);
+    }
+
+    // Build fallback list: all providers except the primary that failed
+    const fallbacks = FALLBACK_ORDER.filter(name => name !== primaryName);
+
+    if (fallbacks.length === 0) {
+      throw formatError(provider.name, primaryErr);
+    }
+
+    console.warn(
+      `[router] Primary provider ${primaryName} failed: ${primaryErr.message}. Trying fallbacks: ${fallbacks.join(", ")}`
+    );
+
+    // Try each fallback
+    const errors: string[] = [`${primaryName}: ${primaryErr.message}`];
+
+    for (const fbName of fallbacks) {
+      const fbProvider = providers[fbName];
+      if (!fbProvider) continue;
+
+      // Need an API key for the fallback provider
+      // Try to get it from env vars
+      const fbKey = getFallbackKey(fbName, apiKey);
+      if (!fbKey) {
+        errors.push(`${fbName}: no API key configured`);
+        continue;
+      }
+
+      try {
+        console.warn(`[router] Trying fallback provider: ${fbName}`);
+        const result = await fbProvider.callLLM(payload, fbKey);
+        console.warn(`[router] Fallback ${fbName} succeeded`);
+        return result;
+      } catch (fbErr: any) {
+        errors.push(`${fbName}: ${fbErr.message}`);
+        continue;
+      }
+    }
+
+    // All providers failed
+    throw new Error(
+      `All LLM providers failed:\n${errors.map(e => `  - ${e}`).join("\n")}`
+    );
   }
+}
+
+/** Try to find an API key for a fallback provider. */
+function getFallbackKey(providerName: string, currentKey: string): string | null {
+  // Check env vars first
+  if (providerName === "openai" && process.env.OPENAI_API_KEY) return process.env.OPENAI_API_KEY;
+  if (providerName === "anthropic" && process.env.ANTHROPIC_API_KEY) return process.env.ANTHROPIC_API_KEY;
+  if (providerName === "ollama") return "ollama-local"; // Ollama doesn't need a key
+
+  // Try loading from encrypted vault
+  try {
+    const { loadKeys } = require("../security/keyVault.js");
+    const keys = loadKeys(process.env.KEY_PASSPHRASE ?? "");
+    if (keys[providerName]) return keys[providerName];
+  } catch {}
+
+  // Last resort: use the current key (works if same provider type)
+  return null;
+}
+
+function formatError(providerName: string, err: any): Error {
+  const msg = err.response?.data?.error?.message
+    || err.response?.data?.error?.type
+    || err.message
+    || "LLM call failed";
+  return new Error(`[${providerName}] ${msg}`);
 }
 
 // Re-export types for convenience

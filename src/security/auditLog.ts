@@ -1,4 +1,4 @@
-import { appendFileSync, readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
+import { appendFileSync, readFileSync, writeFileSync, mkdirSync, existsSync, statSync, renameSync, unlinkSync } from "fs";
 import { randomUUID, createHash } from "crypto";
 import path from "path";
 import { BLOCKED_PATTERNS } from "./safetySpine.js";
@@ -6,6 +6,8 @@ import { BLOCKED_PATTERNS } from "./safetySpine.js";
 const LOG_DIR = path.join(process.cwd(), "logs");
 const AUDIT_FILE = path.join(LOG_DIR, "audit.jsonl");
 const BUFFER_SIZE = 500;
+const MAX_LOG_BYTES = 10 * 1024 * 1024; // 10 MB
+const MAX_ROTATED_FILES = 5;
 
 const SENSITIVE_KEY = /(key|token|secret|password|passphrase|credential)/i;
 
@@ -118,7 +120,36 @@ class AuditLogger {
       this.buffer = this.buffer.slice(-BUFFER_SIZE);
     }
     mkdirSync(LOG_DIR, { recursive: true });
+    this.rotateIfNeeded();
     appendFileSync(AUDIT_FILE, JSON.stringify(event) + "\n");
+  }
+
+  /** Rotate audit.jsonl when it exceeds MAX_LOG_BYTES. Keeps up to MAX_ROTATED_FILES old logs. */
+  private rotateIfNeeded(): void {
+    if (!existsSync(AUDIT_FILE)) return;
+    try {
+      const size = statSync(AUDIT_FILE).size;
+      if (size < MAX_LOG_BYTES) return;
+
+      // Shift existing rotated files: audit.4.jsonl -> audit.5.jsonl, etc.
+      for (let i = MAX_ROTATED_FILES; i >= 1; i--) {
+        const older = path.join(LOG_DIR, `audit.${i}.jsonl`);
+        if (i === MAX_ROTATED_FILES) {
+          // Delete the oldest
+          if (existsSync(older)) unlinkSync(older);
+        } else {
+          const newer = path.join(LOG_DIR, `audit.${i + 1}.jsonl`);
+          if (existsSync(older)) renameSync(older, newer);
+        }
+      }
+
+      // Move current to audit.1.jsonl
+      renameSync(AUDIT_FILE, path.join(LOG_DIR, "audit.1.jsonl"));
+
+      // Start fresh -- new chain begins from GENESIS after rotation
+      // (chain verification works per-file)
+      this.lastHash = "GENESIS";
+    } catch {}
   }
 
   logBlock(label: string, command: string, channel: string, sessionId: string, patternIndex?: number): void {

@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from "fs";
+import { readFileSync, appendFileSync, existsSync, mkdirSync } from "fs";
 import path from "path";
 import { pathToFileURL } from "url";
 import { randomUUID } from "crypto";
@@ -6,6 +6,29 @@ import { Message, SkillMeta } from "../types.js";
 import { runAgentLoop } from "./agentLoop.js";
 import { callLLM } from "../llm/router.js";
 import { scanContext, formatSnapshot } from "./contextScanner.js";
+
+/* ────────── Triage log ────────── */
+const TRIAGE_LOG_DIR = path.join(process.cwd(), "logs");
+const TRIAGE_LOG_FILE = path.join(TRIAGE_LOG_DIR, "heartbeat-triage.jsonl");
+
+interface TriageLogEntry {
+  ts: number;
+  job: string;
+  mode: string;
+  acted: boolean;
+  reason: string;
+  prompt: string | null;
+  durationMs: number;
+  result?: string | null;
+  error?: string;
+}
+
+function logTriage(entry: TriageLogEntry): void {
+  try {
+    mkdirSync(TRIAGE_LOG_DIR, { recursive: true });
+    appendFileSync(TRIAGE_LOG_FILE, JSON.stringify(entry) + "\n");
+  } catch {}
+}
 
 /* ────────── cron_skill integration ────────── */
 
@@ -210,6 +233,7 @@ async function executeFixedJob(
   getApiKey: () => string,
   onResult?: (job: HeartbeatJob, result: any) => void
 ) {
+  const startMs = Date.now();
   const msg: Message = {
     id: `hb-${randomUUID()}`,
     channel: "heartbeat",
@@ -218,8 +242,27 @@ async function executeFixedJob(
     ts: Date.now()
   };
 
-  const result = await runAgentLoop(msg, skills, getApiKey());
-  onResult?.(job, result);
+  let error: string | undefined;
+  let result: any;
+  try {
+    result = await runAgentLoop(msg, skills, getApiKey());
+    onResult?.(job, result);
+  } catch (err: any) {
+    error = err.message;
+    throw err;
+  } finally {
+    logTriage({
+      ts: Date.now(),
+      job: job.name,
+      mode: "fixed",
+      acted: true,
+      reason: "fixed schedule",
+      prompt: job.prompt,
+      durationMs: Date.now() - startMs,
+      result: result?.final?.slice(0, 500) ?? null,
+      error,
+    });
+  }
   console.log(`Heartbeat "${job.name}" completed: ${result.final ?? "(no output)"}`);
 }
 
@@ -229,12 +272,23 @@ async function executeSmartJob(
   getApiKey: () => string,
   onResult?: (job: HeartbeatJob, result: any) => void
 ) {
+  const startMs = Date.now();
+
   // Phase 1: Triage
   console.log(`Heartbeat "${job.name}": scanning context...`);
   const triage = await triageSmartJob(job, getApiKey());
   console.log(`Heartbeat "${job.name}" triage: act=${triage.act}, reason="${triage.reason}"`);
 
   if (!triage.act || !triage.prompt) {
+    logTriage({
+      ts: Date.now(),
+      job: job.name,
+      mode: "smart",
+      acted: false,
+      reason: triage.reason,
+      prompt: null,
+      durationMs: Date.now() - startMs,
+    });
     onResult?.(job, { final: null, skipped: true, reason: triage.reason });
     return;
   }
@@ -248,9 +302,28 @@ async function executeSmartJob(
     ts: Date.now()
   };
 
-  const result = await runAgentLoop(msg, skills, getApiKey(), {
-    sessionId: `heartbeat-${job.name}`
-  });
-  onResult?.(job, { ...result, triageReason: triage.reason });
+  let error: string | undefined;
+  let result: any;
+  try {
+    result = await runAgentLoop(msg, skills, getApiKey(), {
+      sessionId: `heartbeat-${job.name}`
+    });
+    onResult?.(job, { ...result, triageReason: triage.reason });
+  } catch (err: any) {
+    error = err.message;
+    throw err;
+  } finally {
+    logTriage({
+      ts: Date.now(),
+      job: job.name,
+      mode: "smart",
+      acted: true,
+      reason: triage.reason,
+      prompt: triage.prompt.slice(0, 500),
+      durationMs: Date.now() - startMs,
+      result: result?.final?.slice(0, 500) ?? null,
+      error,
+    });
+  }
   console.log(`Heartbeat "${job.name}" acted: ${result.final ?? "(no output)"}`);
 }

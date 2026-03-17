@@ -9,7 +9,7 @@ import { loadKeys, storeKey } from "./security/keyVault.js";
 import { sendTelegramReply, extractChatId } from "./channels/telegram.js";
 import { sendDiscordReply, extractChannelId, startDiscordBot, isDiscordBotRunning } from "./channels/discord.js";
 import { sendSlackReply, extractSlackChannelId, isSlackBotMessage, isSlackUrlVerification, isSlackMessageEvent, getSlackSigningSecret, verifySlackSignature } from "./channels/slack.js";
-import { loadChannelConfig, saveChannelConfig, getMaskedConfig, clearChannelConfigCache } from "./channels/channelConfig.js";
+import { loadChannelConfig, saveChannelConfig, getMaskedConfig, clearChannelConfigCache, migrateChannelSecrets } from "./channels/channelConfig.js";
 import { attachWebSocket } from "./channels/websocket.js";
 import { loadHeartbeatConfig, startHeartbeat } from "./orchestrator/heartbeat.js";
 import { listSessions, loadSession, cleanExpiredSessions } from "./orchestrator/sessionStore.js";
@@ -23,6 +23,7 @@ import { getPublicKey, ensureKeypair } from "./security/skillSigning.js";
 import { getLoopGuardStats } from "./security/loopGuard.js";
 import { ZeroizingCache } from "./security/zeroize.js";
 import { safeStatic } from "./security/pathGuard.js";
+import { getAllQuotas, getQuotaStatus } from "./security/quotaTracker.js";
 import { createServer } from "http";
 import dotenv from "dotenv";
 dotenv.config();
@@ -528,6 +529,27 @@ app.get("/api/security/loop-guard", requireAuth, (req, res) => {
   res.json({ ok: true, ...getLoopGuardStats(sessionId) });
 });
 
+app.get("/api/security/quotas", requireAuth, (_req, res) => {
+  res.json({ ok: true, quotas: getAllQuotas() });
+});
+
+app.get("/api/heartbeat/triage-log", requireAuth, (req, res) => {
+  const logFile = path.join(process.cwd(), "logs", "heartbeat-triage.jsonl");
+  const limit = Math.min(Number(req.query.limit) || 50, 200);
+  if (!fs.existsSync(logFile)) {
+    return res.json({ ok: true, entries: [], total: 0 });
+  }
+  try {
+    const lines = fs.readFileSync(logFile, "utf8").trim().split("\n").filter(Boolean);
+    const entries = lines.slice(-limit).reverse().map(l => {
+      try { return JSON.parse(l); } catch { return null; }
+    }).filter(Boolean);
+    res.json({ ok: true, entries, total: lines.length });
+  } catch {
+    res.json({ ok: true, entries: [], total: 0 });
+  }
+});
+
 app.post("/api/security/clear", requireAuth, (_req, res) => {
   auditLogger.clearLog();
   res.json({ ok: true });
@@ -567,6 +589,12 @@ startDiscordBot(skills, () => getProviderKey());
 // Initialize encrypted skill secrets cache + migrate legacy plaintext if present
 migrateLegacySecrets();
 initSkillSecrets();
+
+// Migrate channel secrets from plaintext to encrypted vault
+const channelMigration = migrateChannelSecrets();
+if (channelMigration.migrated > 0) {
+  console.log(`[vault] Migrated ${channelMigration.migrated} channel secret(s) to encrypted vault`);
+}
 
 // Ensure Ed25519 signing keypair exists
 ensureKeypair();
