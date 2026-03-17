@@ -94,13 +94,18 @@ export function deleteSkill(name: string): void {
     throw new Error(`Cannot delete protected skill: ${name}`);
   }
   const skillDir = path.join(SKILLS_DIR, name);
-  if (!existsSync(skillDir)) {
+  const distDir = path.join(process.cwd(), "dist", "skills", name);
+
+  // Allow deletion if skill exists in either location
+  if (!existsSync(skillDir) && !existsSync(distDir)) {
     throw new Error(`Skill "${name}" does not exist`);
   }
-  rmSync(skillDir, { recursive: true, force: true });
 
-  // Also clean up compiled version in dist/ to prevent stale skills from loading
-  const distDir = path.join(process.cwd(), "dist", "skills", name);
+  if (existsSync(skillDir)) {
+    rmSync(skillDir, { recursive: true, force: true });
+  }
+
+  // Also clean up compiled version in dist/ to prevent stale/orphaned skills
   if (existsSync(distDir)) {
     rmSync(distDir, { recursive: true, force: true });
   }

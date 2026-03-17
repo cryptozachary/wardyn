@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSy
 import path from "path";
 import { callLLM } from "../llm/router.js";
 import { signSession, verifySession, validateSessionStructure, repairSession } from "../security/sessionIntegrity.js";
+import { encryptSession, decryptSession } from "../security/sessionEncryption.js";
 
 const SESSIONS_DIR = path.join(process.cwd(), "sessions");
 const MAX_MESSAGES = 40; // summarize when history exceeds this
@@ -40,12 +41,16 @@ export function loadSession(sessionId: string): Session | null {
   const backupPath = p.replace(".json", ".backup.json");
   let data: any;
   try {
-    data = JSON.parse(readFileSync(p, "utf8"));
+    const raw = readFileSync(p);
+    const json = decryptSession(raw);
+    data = JSON.parse(json);
   } catch {
-    // Primary file corrupted -- try backup
+    // Primary file corrupted or decryption failed -- try backup
     if (existsSync(backupPath)) {
       try {
-        data = JSON.parse(readFileSync(backupPath, "utf8"));
+        const backupRaw = readFileSync(backupPath);
+        const backupJson = decryptSession(backupRaw);
+        data = JSON.parse(backupJson);
         console.warn(`[session] Recovered ${sessionId} from backup (primary corrupted)`);
       } catch {
         return null;
@@ -62,7 +67,9 @@ export function loadSession(sessionId: string): Session | null {
     // Try backup
     if (existsSync(backupPath)) {
       try {
-        const backupData = JSON.parse(readFileSync(backupPath, "utf8"));
+        const backupRaw = readFileSync(backupPath);
+        const backupJson = decryptSession(backupRaw);
+        const backupData = JSON.parse(backupJson);
         const backupIntegrity = verifySession(backupData);
         if (backupIntegrity.valid) {
           console.warn(`[session] Recovered ${sessionId} from backup (HMAC mismatch on primary)`);
@@ -79,15 +86,15 @@ export function loadSession(sessionId: string): Session | null {
     const repaired = repairSession(data, sessionId);
     if (!repaired) return null;
     data = repaired;
-    // Save repaired version
+    // Save repaired version (encrypted)
     const signed = signSession(data);
-    writeFileSync(p, JSON.stringify(signed), "utf8");
+    writeFileSync(p, encryptSession(JSON.stringify(signed)));
   }
 
-  // Re-sign legacy unsigned sessions
+  // Re-sign and encrypt legacy unsigned sessions
   if (integrity.reason === "legacy_unsigned") {
     const signed = signSession(data);
-    writeFileSync(p, JSON.stringify(signed), "utf8");
+    writeFileSync(p, encryptSession(JSON.stringify(signed)));
   }
 
   return data as Session;
@@ -103,7 +110,8 @@ export function saveSession(session: Session): void {
     try { copyFileSync(p, backupPath); } catch {}
   }
   const signed = signSession(session as any);
-  writeFileSync(p, JSON.stringify(signed), "utf8");
+  const encrypted = encryptSession(JSON.stringify(signed));
+  writeFileSync(p, encrypted);
 }
 
 export function createSession(sessionId: string, userId: string): Session {

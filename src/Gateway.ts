@@ -373,7 +373,10 @@ app.delete("/api/hub/packages/:name", requireAuth, (req, res) => {
 // --- Skill Approval Queue endpoints ---
 app.get("/api/approvals", requireAuth, (req, res) => {
   const status = req.query.status as "pending" | "approved" | "rejected" | undefined;
-  res.json({ ok: true, approvals: listApprovals(status) });
+  const limit = Math.min(Number(req.query.limit) || 100, 500);
+  const offset = Number(req.query.offset) || 0;
+  const all = listApprovals(status);
+  res.json({ ok: true, approvals: all.slice(offset, offset + limit), total: all.length });
 });
 
 app.get("/api/approvals/:id", requireAuth, (req, res) => {
@@ -550,9 +553,12 @@ app.post("/api/channels/config", requireAuth, (req, res) => {
 });
 
 // --- Session endpoints ---
-app.get("/api/sessions", requireAuth, (_req, res) => {
-  const userId = _req.query.userId as string | undefined;
-  res.json({ sessions: listSessions(userId) });
+app.get("/api/sessions", requireAuth, (req, res) => {
+  const userId = req.query.userId as string | undefined;
+  const limit = Math.min(Number(req.query.limit) || 50, 200);
+  const offset = Number(req.query.offset) || 0;
+  const all = listSessions(userId);
+  res.json({ sessions: all.slice(offset, offset + limit), total: all.length });
 });
 
 app.get("/api/sessions/:id", requireAuth, (req, res) => {

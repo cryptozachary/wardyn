@@ -11,6 +11,28 @@ interface WsIncoming {
   sessionId?: string;
 }
 
+/* ───────── Per-connection rate limiter ───────── */
+
+const WS_RATE_WINDOW_MS = 60_000;
+const WS_RATE_MAX = Number(process.env.WS_RATE_LIMIT) || 20; // messages per minute per connection
+
+interface RateState {
+  timestamps: number[];
+  warned: boolean;
+}
+
+function checkWsRate(state: RateState): boolean {
+  const now = Date.now();
+  state.timestamps = state.timestamps.filter(t => now - t < WS_RATE_WINDOW_MS);
+  if (state.timestamps.length >= WS_RATE_MAX) {
+    return false;
+  }
+  state.timestamps.push(now);
+  return true;
+}
+
+/* ───────── WebSocket server ───────── */
+
 export function attachWebSocket(
   server: Server,
   skills: SkillMeta[],
@@ -34,7 +56,21 @@ export function attachWebSocket(
     let sessionId = connUrl.searchParams.get("sessionId") || "default";
     const userId = "default";
 
+    // Per-connection rate limiter
+    const rateState: RateState = { timestamps: [], warned: false };
+
     ws.on("message", async (raw) => {
+      // Rate limit check
+      if (!checkWsRate(rateState)) {
+        if (!rateState.warned) {
+          sendJson(ws, { type: "error", error: "Rate limit exceeded. Max " + WS_RATE_MAX + " messages/minute." });
+          rateState.warned = true;
+          // Reset warning flag after window passes
+          setTimeout(() => { rateState.warned = false; }, WS_RATE_WINDOW_MS);
+        }
+        return;
+      }
+
       let data: WsIncoming;
       try {
         data = JSON.parse(raw.toString());

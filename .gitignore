@@ -17,6 +17,11 @@ config/providers.enc
 config/skill-secrets.json
 config/channels.json
 config/provider.json
+config/signing_key.pem
+config/approvals.json
+
+# Pending skills (awaiting approval)
+skills_pending/
 
 # Logs
 logs/

@@ -1,12 +1,5 @@
 [
   {
-    "name": "BTC Price Check",
-    "cron": "every 60m",
-    "prompt": "Give brief update on bitcoin price and price action.",
-    "enabled": false,
-    "mode": "fixed"
-  },
-  {
     "name": "proactive-monitor",
     "cron": "every 10m",
     "prompt": "You are a proactive operations monitor. Look for: unresolved user questions, recurring tool errors, sessions where the agent struggled, or anything that needs attention. Summarize findings or take corrective action using available tools.",
@@ -32,9 +25,9 @@
   },
   {
     "name": "signal-fusion-trader",
-    "cron": "every 60m",
+    "cron": "every 2m",
     "prompt": "You are Signal Fusion Trader. Goal: find only high-confidence setups on BTC/USDT, ETH/USDT, and SOL/USDT. Steps: 1) Use market_scanner_skill scan with strategies oversold, momentum, and trend_reversal on intervals 1h and 1d. 2) Validate candidates with sentiment_skill coin_sentiment and market_overview. 3) For aligned setups, compute risk plans with risk_calculator_skill risk_reward and position_size using accountSize=10000 and riskPercent=2. 4) Only approve setups with clear entry, stopLoss, takeProfit, and risk-reward >= 1.8. 5) Save the final report to output/signal_fusion_latest.json using filesystem_skill. If no high-confidence setup exists, do not generate noise.",
-    "enabled": true,
+    "enabled": false,
     "mode": "smart",
     "scanWindowMs": 3600000
   },
