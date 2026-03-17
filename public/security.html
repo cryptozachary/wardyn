@@ -228,6 +228,41 @@
           <div class="row"><span>Slack HMAC</span><span class="val ok">timingSafeEqual</span></div>
         </div>
       </div>
+
+      <!-- Secret Zeroization -->
+      <div class="system-card">
+        <h3><span class="status-dot green"></span> Secret Zeroization</h3>
+        <div class="system-detail">
+          <div class="row"><span>Key Cache</span><span class="val ok">Auto-Zeroizing</span></div>
+          <div class="row"><span>TTL</span><span class="val">60s inactivity</span></div>
+          <div class="row"><span>Vault Buffers</span><span class="val ok">Wiped on decrypt</span></div>
+          <div class="row"><span>Cache Invalidation</span><span class="val ok">On key change</span></div>
+        </div>
+      </div>
+
+      <!-- Session Integrity -->
+      <div class="system-card">
+        <h3><span class="status-dot green"></span> Session Integrity</h3>
+        <div class="system-detail">
+          <div class="row"><span>HMAC Signing</span><span class="val ok">SHA-256</span></div>
+          <div class="row"><span>Tamper Detection</span><span class="val ok">Active</span></div>
+          <div class="row"><span>Auto Backup</span><span class="val ok">On every save</span></div>
+          <div class="row"><span>Auto Repair</span><span class="val ok">Structure + recovery</span></div>
+          <div class="row"><span>Legacy Migration</span><span class="val ok">Auto re-sign</span></div>
+        </div>
+      </div>
+
+      <!-- Path Traversal -->
+      <div class="system-card">
+        <h3><span class="status-dot green"></span> Path Traversal Guard</h3>
+        <div class="system-detail">
+          <div class="row"><span>Static Routes</span><span class="val ok">Protected</span></div>
+          <div class="row"><span>Null Byte Check</span><span class="val ok">Blocked</span></div>
+          <div class="row"><span>Symlink Resolution</span><span class="val ok">realpath</span></div>
+          <div class="row"><span>.. Traversal</span><span class="val ok">Blocked</span></div>
+          <div class="row"><span>Protected Paths</span><span class="val">/ui, /output</span></div>
+        </div>
+      </div>
     </div>
 
     <!-- Recent Events -->

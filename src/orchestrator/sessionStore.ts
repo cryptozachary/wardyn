@@ -1,6 +1,7 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, unlinkSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, unlinkSync, copyFileSync } from "fs";
 import path from "path";
 import { callLLM } from "../llm/router.js";
+import { signSession, verifySession, validateSessionStructure, repairSession } from "../security/sessionIntegrity.js";
 
 const SESSIONS_DIR = path.join(process.cwd(), "sessions");
 const MAX_MESSAGES = 40; // summarize when history exceeds this
@@ -36,17 +37,73 @@ function sessionPath(sessionId: string): string {
 export function loadSession(sessionId: string): Session | null {
   const p = sessionPath(sessionId);
   if (!existsSync(p)) return null;
+  const backupPath = p.replace(".json", ".backup.json");
+  let data: any;
   try {
-    return JSON.parse(readFileSync(p, "utf8"));
+    data = JSON.parse(readFileSync(p, "utf8"));
   } catch {
-    return null;
+    // Primary file corrupted -- try backup
+    if (existsSync(backupPath)) {
+      try {
+        data = JSON.parse(readFileSync(backupPath, "utf8"));
+        console.warn(`[session] Recovered ${sessionId} from backup (primary corrupted)`);
+      } catch {
+        return null;
+      }
+    } else {
+      return null;
+    }
   }
+
+  // Verify HMAC integrity
+  const integrity = verifySession(data);
+  if (!integrity.valid) {
+    console.warn(`[session] Integrity check failed for ${sessionId}: ${integrity.reason}`);
+    // Try backup
+    if (existsSync(backupPath)) {
+      try {
+        const backupData = JSON.parse(readFileSync(backupPath, "utf8"));
+        const backupIntegrity = verifySession(backupData);
+        if (backupIntegrity.valid) {
+          console.warn(`[session] Recovered ${sessionId} from backup (HMAC mismatch on primary)`);
+          data = backupData;
+        }
+      } catch {}
+    }
+  }
+
+  // Validate structure and repair if needed
+  const issues = validateSessionStructure(data);
+  if (issues.length > 0) {
+    console.warn(`[session] Structure issues in ${sessionId}: ${issues.join(", ")}`);
+    const repaired = repairSession(data, sessionId);
+    if (!repaired) return null;
+    data = repaired;
+    // Save repaired version
+    const signed = signSession(data);
+    writeFileSync(p, JSON.stringify(signed), "utf8");
+  }
+
+  // Re-sign legacy unsigned sessions
+  if (integrity.reason === "legacy_unsigned") {
+    const signed = signSession(data);
+    writeFileSync(p, JSON.stringify(signed), "utf8");
+  }
+
+  return data as Session;
 }
 
 export function saveSession(session: Session): void {
   ensureDir();
   session.updatedAt = Date.now();
-  writeFileSync(sessionPath(session.id), JSON.stringify(session), "utf8");
+  const p = sessionPath(session.id);
+  // Create backup of current file before overwriting
+  if (existsSync(p)) {
+    const backupPath = p.replace(".json", ".backup.json");
+    try { copyFileSync(p, backupPath); } catch {}
+  }
+  const signed = signSession(session as any);
+  writeFileSync(p, JSON.stringify(signed), "utf8");
 }
 
 export function createSession(sessionId: string, userId: string): Session {

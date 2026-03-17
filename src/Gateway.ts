@@ -21,6 +21,8 @@ import { exportSkill, importSkill, importFromUrl, listPackages, getPackage, dele
 import { getMaskedSecrets, setSkillSecret, deleteSkillSecret, initSkillSecrets, migrateLegacySecrets } from "./security/skillSecrets.js";
 import { getPublicKey, ensureKeypair } from "./security/skillSigning.js";
 import { getLoopGuardStats } from "./security/loopGuard.js";
+import { ZeroizingCache } from "./security/zeroize.js";
+import { safeStatic } from "./security/pathGuard.js";
 import { createServer } from "http";
 import dotenv from "dotenv";
 dotenv.config();
@@ -41,17 +43,13 @@ const PORT = Number(process.env.PORT) || 3000;
 const HOST = "127.0.0.1";
 const API_TOKEN = process.env.API_TOKEN;
 
-// cache decrypted keys to avoid per-request decrypt
-let cachedKeys: Record<string, string> | null = null;
+// Auto-zeroizing key cache: decrypted keys are wiped from memory after 60s of inactivity
+const keyCache = new ZeroizingCache(
+  () => loadKeys(process.env.KEY_PASSPHRASE ?? ""),
+  60_000,
+);
 function getKeys(): Record<string, string> {
-  if (cachedKeys) return cachedKeys;
-  try {
-    cachedKeys = loadKeys(process.env.KEY_PASSPHRASE ?? "");
-  } catch {
-    console.error("[vault] Failed to decrypt providers.enc — check KEY_PASSPHRASE in .env");
-    cachedKeys = {};
-  }
-  return cachedKeys;
+  return keyCache.get();
 }
 
 function getProviderKey(): string {
@@ -113,12 +111,12 @@ app.use((_req, res, next) => {
   next();
 });
 
-// Serve static UI
-app.use("/ui", express.static(path.join(process.cwd(), "public")));
+// Serve static UI with path traversal protection
+app.use("/ui", ...safeStatic(path.join(process.cwd(), "public")));
 app.get("/chat", (_req, res) => res.sendFile(path.join(process.cwd(), "public", "chat.html")));
 
-// Serve skill output files (images, downloads, etc.)
-app.use("/output", express.static(path.join(process.cwd(), "output")));
+// Serve skill output files with path traversal protection
+app.use("/output", ...safeStatic(path.join(process.cwd(), "output")));
 function normalizeTelegram(body: any): Message {
   return { id: String(body.update_id ?? Date.now()), channel: "telegram", userId: String(body.message?.from?.id ?? "unknown"), text: body.message?.text ?? "", ts: Date.now() };
 }
@@ -146,7 +144,7 @@ app.post("/api/setup/store-key", requireAuth, (req, res) => {
   }
   try {
     storeKey(providerName, apiKey, passphrase);
-    cachedKeys = null;
+    keyCache.invalidate();
     res.json({ ok: true, provider: providerName });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: err.message });
@@ -161,7 +159,7 @@ app.post("/api/setup/provider", requireAuth, (req, res) => {
   }
   try {
     setProviderName(provider);
-    cachedKeys = null; // refresh key cache for new provider
+    keyCache.invalidate(); // refresh key cache for new provider
     res.json({ ok: true, provider: getProviderName() });
   } catch (err: any) {
     res.status(400).json({ ok: false, error: err.message });
