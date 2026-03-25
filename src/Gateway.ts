@@ -26,6 +26,7 @@ import { safeStatic } from "./security/pathGuard.js";
 import { getAllQuotas, getQuotaStatus } from "./security/quotaTracker.js";
 import { submitForApproval, approveSkill, rejectSkill, listApprovals, getApproval, isApprovalRequired } from "./security/approvalQueue.js";
 import { assertCodeSafe } from "./security/astAnalyzer.js";
+import { upload, fileToAttachment, cleanExpiredUploads, UPLOADS_DIR } from "./uploads/uploadHandler.js";
 import { createServer } from "http";
 import dotenv from "dotenv";
 dotenv.config();
@@ -567,6 +568,18 @@ app.get("/api/sessions/:id", requireAuth, (req, res) => {
   res.json(session);
 });
 
+// --- File Upload endpoints ---
+app.post("/api/upload", requireAuth, upload.array("files", 10), (req, res) => {
+  const files = req.files as Express.Multer.File[];
+  if (!files || files.length === 0) {
+    return res.status(400).json({ ok: false, error: "No files uploaded" });
+  }
+  const attachments = files.map(fileToAttachment);
+  res.json({ ok: true, attachments });
+});
+
+app.use("/uploads", requireAuth, ...safeStatic(UPLOADS_DIR));
+
 // --- Security Audit endpoints ---
 app.get("/api/security/events", requireAuth, (req, res) => {
   const limit = Math.min(Number(req.query.limit) || 50, 500);
@@ -671,6 +684,7 @@ ensureKeypair();
 
 // Clean expired sessions every hour
 setInterval(() => cleanExpiredSessions(), 3_600_000).unref();
+setInterval(() => cleanExpiredUploads(), 3_600_000).unref();
 
 server.listen(PORT, HOST, () => {
   console.log(`Secure-Claw Gateway listening on http://${HOST}:${PORT}`);

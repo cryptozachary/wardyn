@@ -1,7 +1,8 @@
-import { Message, ToolCall, ToolResult, SkillMeta, OnStream } from "../types.js";
+import { Message, Attachment, ToolCall, ToolResult, SkillMeta, OnStream } from "../types.js";
 import { readFileSync, appendFileSync, mkdirSync, existsSync } from "fs";
 import path from "path";
 import { callLLM } from "../llm/router.js";
+import { readAttachmentContent } from "../uploads/uploadHandler.js";
 import { checkSafe } from "../security/safetySpine.js";
 import { auditLogger } from "../security/auditLog.js";
 import { checkLoop } from "../security/loopGuard.js";
@@ -79,11 +80,15 @@ export async function runAgentLoop(
     }
   }
 
-  // Add the new user message
-  messages.push({ role: "user", content: msg.text });
+  // Add the new user message (multimodal if attachments present)
+  const userContent = await buildUserContent(msg.text, msg.attachments);
+  messages.push({ role: "user", content: userContent });
 
-  // Track in session
-  appendToSession(session, { role: "user", content: msg.text, ts: Date.now() });
+  // Track in session (store text-only summary for history)
+  const sessionText = msg.attachments?.length
+    ? `${msg.text}\n\n[Attachments: ${msg.attachments.map(a => a.name).join(", ")}]`
+    : msg.text;
+  appendToSession(session, { role: "user", content: sessionText, ts: Date.now() });
 
   let toolResults: ToolResult[] = [];
   let iterations = 0;
@@ -186,6 +191,46 @@ export async function runAgentLoop(
   saveSession(session);
 
   return { final: finalText, toolResults, sessionId: sid };
+}
+
+/**
+ * Build user message content — plain string for text-only, multimodal array
+ * for messages with attachments (OpenAI/Anthropic vision format).
+ * Async because PDF/DOCX extraction requires async operations.
+ */
+async function buildUserContent(text: string, attachments?: Attachment[]): Promise<any> {
+  if (!attachments?.length) return text;
+
+  const parts: any[] = [];
+
+  // Add text part first
+  if (text) {
+    parts.push({ type: "text", text });
+  }
+
+  // Add each attachment as appropriate content block
+  for (const att of attachments) {
+    const content = await readAttachmentContent(att);
+    switch (content.type) {
+      case "image":
+        parts.push({
+          type: "image_url",
+          image_url: { url: `data:${content.mimeType};base64,${content.base64}` },
+        });
+        break;
+      case "text":
+        parts.push({
+          type: "text",
+          text: `--- File: ${att.name} ---\n${content.content}\n--- End of ${att.name} ---`,
+        });
+        break;
+      case "file":
+        parts.push({ type: "text", text: content.description });
+        break;
+    }
+  }
+
+  return parts;
 }
 
 function validateArgs(args: any, channel?: string, sessionId?: string) {

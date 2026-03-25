@@ -52,50 +52,69 @@ export const parameters = {
 /* ────────────────────── constants ────────────────────── */
 
 const SANDBOX_DIR = path.join(process.cwd(), "sandbox");
+const UPLOADS_DIR = path.join(process.cwd(), "uploads");
+const ALLOWED_DIRS = [SANDBOX_DIR, UPLOADS_DIR];
 const MAX_READ_BYTES = 2 * 1024 * 1024;   // 2 MB
 const MAX_WRITE_BYTES = 5 * 1024 * 1024;  // 5 MB
 const MAX_READ_LINES = 5000;
 
 /* ────────────────────── path security ────────────────────── */
 
+function isInAllowedDir(p: string): boolean {
+  return ALLOWED_DIRS.some(dir => {
+    const normalDir = path.resolve(dir) + path.sep;
+    return p.startsWith(normalDir) || p === path.resolve(dir);
+  });
+}
+
 /**
- * Resolve a user-supplied relative path to a canonical absolute path
- * and verify it stays within the sandbox boundary.
+ * Resolve a user-supplied path to a canonical absolute path
+ * and verify it stays within allowed directories (sandbox or uploads).
+ * Absolute paths are allowed if they point into an allowed directory.
  * Uses realpath for existing paths (catches symlink escapes)
  * and resolve for new paths (catches ../ traversal).
  */
-async function safePath(relPath: string): Promise<string> {
-  if (!relPath || typeof relPath !== "string") {
+async function safePath(filePath: string): Promise<string> {
+  if (!filePath || typeof filePath !== "string") {
     throw new Error("filePath is required");
   }
 
-  // Block absolute paths early
-  if (path.isAbsolute(relPath)) {
-    throw new Error("Absolute paths are not allowed — use relative paths inside sandbox");
+  // Support absolute paths pointing into allowed directories
+  let resolved: string;
+  if (path.isAbsolute(filePath)) {
+    resolved = path.resolve(filePath);
+  } else {
+    // Try sandbox first, fall back to uploads for relative paths
+    resolved = path.resolve(SANDBOX_DIR, filePath);
+    try {
+      await fs.access(resolved, constants.F_OK);
+    } catch {
+      const uploadsResolved = path.resolve(UPLOADS_DIR, filePath);
+      try {
+        await fs.access(uploadsResolved, constants.F_OK);
+        resolved = uploadsResolved;
+      } catch { /* keep sandbox path */ }
+    }
   }
 
-  // Resolve to absolute (this normalizes ../ etc.)
-  const resolved = path.resolve(SANDBOX_DIR, relPath);
-
-  // Boundary check on the resolved path (before realpath, in case file doesn't exist yet)
-  const normalSandbox = path.resolve(SANDBOX_DIR) + path.sep;
-  if (!resolved.startsWith(normalSandbox) && resolved !== path.resolve(SANDBOX_DIR)) {
-    throw new Error("Path escapes sandbox boundary");
+  // Boundary check
+  if (!isInAllowedDir(resolved)) {
+    throw new Error("Path must be within sandbox or uploads directory");
   }
 
   // For existing files, also check realpath to catch symlink escapes
   try {
     await fs.access(resolved, constants.F_OK);
     const real = await fs.realpath(resolved);
-    if (!real.startsWith(normalSandbox) && real !== path.resolve(SANDBOX_DIR)) {
-      throw new Error("Path escapes sandbox boundary (symlink detected)");
+    if (!isInAllowedDir(real)) {
+      throw new Error("Path escapes allowed directories (symlink detected)");
     }
     return real;
   } catch (err: any) {
     // File doesn't exist — that's fine for write/mkdir/etc, use resolved path
     if (err.code === "ENOENT") return resolved;
     // Re-throw our own boundary errors
-    if (err.message?.includes("sandbox boundary")) throw err;
+    if (err.message?.includes("allowed") || err.message?.includes("sandbox")) throw err;
     return resolved;
   }
 }

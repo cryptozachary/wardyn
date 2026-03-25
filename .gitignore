@@ -40,5 +40,8 @@ sandbox/*
 # Sessions
 sessions/
 
+# Uploads
+uploads/
+
 # Coverage
 coverage/

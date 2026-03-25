@@ -1,14 +1,16 @@
 import { WebSocketServer, WebSocket } from "ws";
 import type { Server } from "http";
 import { randomUUID } from "crypto";
-import { Message, SkillMeta, OnStream } from "../types.js";
+import { Message, Attachment, SkillMeta, OnStream } from "../types.js";
 import { runAgentLoop } from "../orchestrator/agentLoop.js";
+import { getAttachmentById } from "../uploads/uploadHandler.js";
 
 interface WsIncoming {
   type: "message" | "new_session";
   text?: string;
   userId?: string;
   sessionId?: string;
+  attachmentIds?: string[];
 }
 
 /* ───────── Per-connection rate limiter ───────── */
@@ -96,12 +98,21 @@ export function attachWebSocket(
         sessionId = data.sessionId;
       }
 
+      // Resolve attachment references from prior upload
+      let attachments: Attachment[] | undefined;
+      if (data.attachmentIds?.length) {
+        attachments = data.attachmentIds
+          .map(id => getAttachmentById(id))
+          .filter((a): a is Attachment => a !== null);
+      }
+
       const msg: Message = {
         id: randomUUID(),
         channel: "websocket",
         userId: data.userId ?? userId,
         text: data.text,
-        ts: Date.now()
+        ts: Date.now(),
+        ...(attachments?.length ? { attachments } : {}),
       };
 
       const onStream: OnStream = (event) => {

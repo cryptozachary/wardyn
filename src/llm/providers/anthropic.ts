@@ -69,6 +69,24 @@ function convertMessages(msgs: CallPayload["messages"]): any[] {
       } else {
         result.push({ role: "user", content: [block] });
       }
+    } else if (msg.role === "user" && Array.isArray(msg.content)) {
+      // Multimodal content — convert OpenAI image_url blocks to Anthropic image blocks
+      const content: any[] = [];
+      for (const part of msg.content) {
+        if (part.type === "text") {
+          content.push({ type: "text", text: part.text });
+        } else if (part.type === "image_url") {
+          const url: string = part.image_url?.url ?? "";
+          const match = url.match(/^data:([^;]+);base64,(.+)$/);
+          if (match) {
+            content.push({
+              type: "image",
+              source: { type: "base64", media_type: match[1], data: match[2] },
+            });
+          }
+        }
+      }
+      result.push({ role: "user", content });
     } else {
       result.push({ role: msg.role, content: msg.content ?? "" });
     }

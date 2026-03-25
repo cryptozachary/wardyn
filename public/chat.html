@@ -51,13 +51,32 @@
     .lightbox img { max-width: 95%; max-height: 95%; border-radius: 8px; }
 
     /* Input */
-    .input-area { display: flex; gap: 8px; padding: 12px 16px; background: #141d35; border-top: 1px solid #1e2d4a; flex-shrink: 0; }
+    .input-area { display: flex; gap: 8px; padding: 12px 16px; background: #141d35; border-top: 1px solid #1e2d4a; flex-shrink: 0; flex-wrap: wrap; }
+    .input-row { display: flex; gap: 8px; width: 100%; align-items: flex-end; }
     .input-area textarea { flex: 1; padding: 10px 14px; border-radius: 8px; border: 1px solid #1e2d4a; background: #1e293b; color: #e2e8f0; font-size: 14px; font-family: inherit; resize: none; min-height: 42px; max-height: 120px; }
     .input-area textarea::placeholder { color: #475569; }
     .input-area textarea:focus { outline: none; border-color: #0f62fe; }
+    .upload-btn { padding: 10px 12px; border: none; border-radius: 8px; background: #1e293b; color: #94a3b8; font-size: 18px; cursor: pointer; align-self: flex-end; border: 1px solid #1e2d4a; transition: all 0.15s; }
+    .upload-btn:hover { background: #2d3a52; color: #e2e8f0; }
     .send-btn { padding: 10px 20px; border: none; border-radius: 8px; background: #0f62fe; color: #fff; font-weight: 600; font-size: 14px; cursor: pointer; align-self: flex-end; }
     .send-btn:disabled { background: #1e3a5f; color: #475569; cursor: not-allowed; }
     .send-btn:hover:not(:disabled) { background: #2563eb; }
+
+    /* File previews */
+    .file-previews { display: flex; gap: 8px; width: 100%; flex-wrap: wrap; padding: 0; }
+    .file-previews:empty { display: none; }
+    .file-preview { display: flex; align-items: center; gap: 6px; padding: 4px 8px; background: #1e293b; border: 1px solid #1e2d4a; border-radius: 6px; font-size: 12px; color: #94a3b8; max-width: 220px; }
+    .file-preview img { width: 32px; height: 32px; border-radius: 4px; object-fit: cover; }
+    .file-preview .file-icon { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: #0f172a; border-radius: 4px; font-size: 14px; }
+    .file-preview .file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .file-preview .file-size { color: #475569; font-size: 10px; }
+    .file-preview .remove-file { cursor: pointer; color: #ef4444; font-weight: bold; padding: 0 4px; }
+    .file-preview .remove-file:hover { color: #f87171; }
+
+    /* Drag overlay */
+    .drag-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15,98,254,0.15); border: 3px dashed #0f62fe; z-index: 999; justify-content: center; align-items: center; pointer-events: none; }
+    .drag-overlay.active { display: flex; }
+    .drag-overlay span { font-size: 20px; font-weight: 600; color: #60a5fa; background: #0c162f; padding: 16px 32px; border-radius: 12px; }
   </style>
 </head>
 <body>
@@ -86,9 +105,16 @@
 
   <div class="messages" id="messages"></div>
 
+  <div class="drag-overlay" id="dragOverlay"><span>Drop files to attach</span></div>
+
   <div class="input-area">
-    <textarea id="input" placeholder="Type a message..." rows="1"></textarea>
-    <button class="send-btn" id="sendBtn">Send</button>
+    <div class="file-previews" id="filePreviews"></div>
+    <div class="input-row">
+      <button class="upload-btn" id="uploadBtn" title="Attach files">&#128206;</button>
+      <textarea id="input" placeholder="Type a message... (drop or paste files)" rows="1"></textarea>
+      <button class="send-btn" id="sendBtn">Send</button>
+    </div>
+    <input type="file" id="fileInput" multiple hidden accept="image/*,.txt,.csv,.md,.json,.xml,.html,.css,.js,.ts,.jsx,.tsx,.py,.go,.rs,.java,.c,.cpp,.h,.hpp,.rb,.php,.sh,.yml,.yaml,.toml,.ini,.sql,.pdf,.zip,.doc,.docx,.xls,.xlsx,.pptx,.log" />
   </div>
 
   <div class="lightbox" id="lightbox" onclick="this.classList.remove('active')">
@@ -102,6 +128,7 @@ let ws = null;
 let sending = false;
 let currentSessionId = null; // unified "default" session — no longer persisted per-tab
 let httpSessionId = null;
+let pendingFiles = []; // { file: File, uploaded?: { id, name, mimeType, path, size } }
 
 function persistSession() {
   // Sessions are unified as "default" — no need to persist per-tab
@@ -289,23 +316,24 @@ function reconnectWs() {
   if (mode === 'ws') connectWs();
 }
 
-function sendWs(text) {
+function sendWs(text, attachments) {
   if (!ws || ws.readyState !== WebSocket.OPEN) {
     addMsg('Not connected. Reconnecting...', 'system');
     connectWs();
     return;
   }
   setDisabled(true);
-  addMsg(text, 'user');
+  if (!attachments) addMsg(text, 'user');
   const payload = { type: 'message', text };
   if (currentSessionId) payload.sessionId = currentSessionId;
+  if (attachments?.length) payload.attachmentIds = attachments.map(a => a.id);
   ws.send(JSON.stringify(payload));
 }
 
 // --- HTTP ---
-async function sendHttp(text) {
+async function sendHttp(text, attachments) {
   setDisabled(true);
-  addMsg(text, 'user');
+  if (!attachments) addMsg(text, 'user');
   const thinkingMsg = addMsg('Thinking...', 'thinking');
 
   try {
@@ -313,10 +341,13 @@ async function sendHttp(text) {
     const token = getToken();
     if (token) headers['x-api-token'] = token;
 
+    const body = { message: { text, from: { id: httpSessionId || 'chat-ui' } } };
+    if (attachments?.length) body.message.attachmentIds = attachments.map(a => a.id);
+
     const res = await fetch('/webhook/telegram', {
       method: 'POST',
       headers,
-      body: JSON.stringify({ message: { text, from: { id: httpSessionId || 'chat-ui' } } })
+      body: JSON.stringify(body)
     });
     const data = await res.json();
 
@@ -394,14 +425,39 @@ btnWs.addEventListener('click', () => setMode('ws'));
 btnHttp.addEventListener('click', () => setMode('http'));
 
 // --- Send ---
-function send() {
+async function send() {
   const text = input.value.trim();
-  if (!text || sending) return;
+  if ((!text && pendingFiles.length === 0) || sending) return;
   input.value = '';
   input.style.height = 'auto';
 
-  if (mode === 'ws') sendWs(text);
-  else sendHttp(text);
+  let attachments = null;
+  if (pendingFiles.length > 0) {
+    try {
+      setDisabled(true);
+      addMsg('Uploading files...', 'thinking');
+      attachments = await uploadFiles();
+      // Remove "Uploading..." message
+      const msgs = msgContainer.querySelectorAll('.msg.thinking');
+      const last = msgs[msgs.length - 1];
+      if (last && last.textContent === 'Uploading files...') last.remove();
+    } catch (err) {
+      addMsg('Upload failed: ' + err.message, 'error');
+      setDisabled(false);
+      return;
+    }
+    pendingFiles = [];
+    renderPreviews();
+  }
+
+  const displayText = text + (attachments?.length ? '\n[Attached: ' + attachments.map(a => a.name).join(', ') + ']' : '');
+
+  if (mode === 'ws') sendWs(text || 'Analyze the attached files', attachments);
+  else sendHttp(text || 'Analyze the attached files', attachments);
+
+  if (attachments?.length) {
+    addMsg(displayText, 'user');
+  }
 }
 
 sendBtn.addEventListener('click', send);
@@ -409,6 +465,143 @@ input.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
     send();
+  }
+});
+
+// --- File Upload ---
+const fileInput = document.getElementById('fileInput');
+const uploadBtn = document.getElementById('uploadBtn');
+const filePreviews = document.getElementById('filePreviews');
+const dragOverlay = document.getElementById('dragOverlay');
+
+uploadBtn.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', () => {
+  if (fileInput.files.length) addFiles(Array.from(fileInput.files));
+  fileInput.value = '';
+});
+
+function addFiles(files) {
+  const MAX_SIZE = 30 * 1024 * 1024;
+  for (const file of files) {
+    if (file.size > MAX_SIZE) {
+      addMsg(`File "${file.name}" exceeds 30MB limit`, 'error');
+      continue;
+    }
+    if (pendingFiles.some(p => p.file.name === file.name && p.file.size === file.size)) continue;
+    pendingFiles.push({ file });
+  }
+  renderPreviews();
+}
+
+function renderPreviews() {
+  filePreviews.innerHTML = '';
+  for (let i = 0; i < pendingFiles.length; i++) {
+    const pf = pendingFiles[i];
+    const div = document.createElement('div');
+    div.className = 'file-preview';
+
+    if (pf.file.type.startsWith('image/')) {
+      const img = document.createElement('img');
+      img.src = URL.createObjectURL(pf.file);
+      div.appendChild(img);
+    } else {
+      const icon = document.createElement('div');
+      icon.className = 'file-icon';
+      const ext = pf.file.name.split('.').pop()?.toUpperCase() || '?';
+      icon.textContent = ext.slice(0, 3);
+      div.appendChild(icon);
+    }
+
+    const name = document.createElement('span');
+    name.className = 'file-name';
+    name.textContent = pf.file.name;
+    name.title = pf.file.name;
+    div.appendChild(name);
+
+    const size = document.createElement('span');
+    size.className = 'file-size';
+    size.textContent = formatSize(pf.file.size);
+    div.appendChild(size);
+
+    const remove = document.createElement('span');
+    remove.className = 'remove-file';
+    remove.textContent = '\u00d7';
+    remove.onclick = () => { pendingFiles.splice(i, 1); renderPreviews(); };
+    div.appendChild(remove);
+
+    filePreviews.appendChild(div);
+  }
+}
+
+function formatSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+async function uploadFiles() {
+  const toUpload = pendingFiles.filter(p => !p.uploaded);
+  if (toUpload.length === 0) return pendingFiles.map(p => p.uploaded);
+
+  const formData = new FormData();
+  for (const pf of toUpload) {
+    formData.append('files', pf.file);
+  }
+
+  const headers = {};
+  const token = getToken();
+  if (token) headers['x-api-token'] = token;
+
+  const res = await fetch('/api/upload', { method: 'POST', headers, body: formData });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Upload failed' }));
+    throw new Error(err.error || 'Upload failed');
+  }
+  const data = await res.json();
+
+  // Map uploaded results back to pending files
+  let idx = 0;
+  for (const pf of toUpload) {
+    pf.uploaded = data.attachments[idx++];
+  }
+
+  return pendingFiles.map(p => p.uploaded);
+}
+
+// Drag and drop
+let dragCounter = 0;
+document.addEventListener('dragenter', (e) => {
+  e.preventDefault();
+  dragCounter++;
+  dragOverlay.classList.add('active');
+});
+document.addEventListener('dragleave', (e) => {
+  e.preventDefault();
+  dragCounter--;
+  if (dragCounter <= 0) { dragCounter = 0; dragOverlay.classList.remove('active'); }
+});
+document.addEventListener('dragover', (e) => e.preventDefault());
+document.addEventListener('drop', (e) => {
+  e.preventDefault();
+  dragCounter = 0;
+  dragOverlay.classList.remove('active');
+  if (e.dataTransfer?.files?.length) addFiles(Array.from(e.dataTransfer.files));
+});
+
+// Clipboard paste
+input.addEventListener('paste', (e) => {
+  const items = e.clipboardData?.items;
+  if (!items) return;
+  const files = [];
+  for (const item of items) {
+    if (item.kind === 'file') {
+      const f = item.getAsFile();
+      if (f) files.push(f);
+    }
+  }
+  if (files.length) {
+    e.preventDefault();
+    addFiles(files);
   }
 });
 

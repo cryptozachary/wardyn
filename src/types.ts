@@ -1,5 +1,12 @@
 export type Channel = "telegram" | "discord" | "websocket" | "heartbeat" | "slack";
-export interface Message { id: string; channel: Channel; userId: string; text: string; ts: number; }
+export interface Attachment {
+  id: string;
+  name: string;
+  mimeType: string;
+  path: string;
+  size: number;
+}
+export interface Message { id: string; channel: Channel; userId: string; text: string; ts: number; attachments?: Attachment[]; }
 export interface ToolCall { name: string; args: Record<string, unknown>; }
 export interface ToolResult { name: string; output: string; error?: string; }
 export interface SkillSecretDef { description: string; required?: boolean; }

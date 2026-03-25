@@ -20,6 +20,8 @@ export const parameters = {
 /* ────────────────────── constants ────────────────────── */
 
 const SANDBOX_DIR = path.join(process.cwd(), "sandbox");
+const UPLOADS_DIR = path.join(process.cwd(), "uploads");
+const ALLOWED_DIRS = [SANDBOX_DIR, UPLOADS_DIR];
 const DEFAULT_MAX_CHARS = 10000;
 const ABSOLUTE_MAX_CHARS = 50000;
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
@@ -27,25 +29,49 @@ const TIMEOUT = 30000;
 
 /* ────────────────────── path safety ────────────────────── */
 
-async function safePath(relPath: string): Promise<string> {
-  if (!relPath || typeof relPath !== "string") throw new Error("filePath is required");
-  if (path.isAbsolute(relPath)) throw new Error("Absolute paths not allowed");
+async function safePath(filePath: string): Promise<string> {
+  if (!filePath || typeof filePath !== "string") throw new Error("filePath is required");
 
-  const resolved = path.resolve(SANDBOX_DIR, relPath);
-  const normalSandbox = path.resolve(SANDBOX_DIR) + path.sep;
-  if (!resolved.startsWith(normalSandbox) && resolved !== path.resolve(SANDBOX_DIR)) {
-    throw new Error("Path escapes sandbox boundary");
+  // Support absolute paths that point into allowed directories (sandbox or uploads)
+  let resolved: string;
+  if (path.isAbsolute(filePath)) {
+    resolved = path.resolve(filePath);
+  } else {
+    // Try sandbox first, fall back to uploads for relative paths
+    resolved = path.resolve(SANDBOX_DIR, filePath);
+    try {
+      await fs.access(resolved);
+    } catch {
+      const uploadsResolved = path.resolve(UPLOADS_DIR, filePath);
+      try {
+        await fs.access(uploadsResolved);
+        resolved = uploadsResolved;
+      } catch { /* keep sandbox path — will error later with proper message */ }
+    }
+  }
+
+  // Check that resolved path is within an allowed directory
+  const inAllowed = ALLOWED_DIRS.some(dir => {
+    const normalDir = path.resolve(dir) + path.sep;
+    return resolved.startsWith(normalDir) || resolved === path.resolve(dir);
+  });
+  if (!inAllowed) {
+    throw new Error("Path must be within sandbox or uploads directory");
   }
 
   try {
     const real = await fs.realpath(resolved);
-    if (!real.startsWith(normalSandbox) && real !== path.resolve(SANDBOX_DIR)) {
-      throw new Error("Path escapes sandbox (symlink detected)");
+    const realInAllowed = ALLOWED_DIRS.some(dir => {
+      const normalDir = path.resolve(dir) + path.sep;
+      return real.startsWith(normalDir) || real === path.resolve(dir);
+    });
+    if (!realInAllowed) {
+      throw new Error("Path escapes allowed directories (symlink detected)");
     }
     return real;
   } catch (err: any) {
-    if (err.code === "ENOENT") throw new Error(`File not found: ${relPath}`);
-    if (err.message?.includes("sandbox")) throw err;
+    if (err.code === "ENOENT") throw new Error(`File not found: ${filePath}`);
+    if (err.message?.includes("allowed") || err.message?.includes("sandbox")) throw err;
     return resolved;
   }
 }
