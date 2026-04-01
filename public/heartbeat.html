@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Secure-Claw Heartbeat Manager</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0c162f; color: #e2e8f0; min-height: 100vh; }
+
+    .header { display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: #141d35; border-bottom: 1px solid #1e2d4a; flex-wrap: wrap; }
+    .header h1 { font-size: 16px; font-weight: 600; color: #94a3b8; }
+    .nav-links { display: flex; gap: 8px; margin-left: auto; }
+    .nav-link { padding: 6px 12px; border: 1px solid #1e2d4a; border-radius: 6px; background: #1e293b; color: #94a3b8; font-size: 12px; text-decoration: none; }
+    .nav-link:hover { background: #2d3a52; color: #e2e8f0; }
+    .nav-link.active { background: #0f62fe; color: #fff; border-color: #0f62fe; }
+
+    .container { max-width: 1100px; margin: 0 auto; padding: 20px; }
+
+    .toolbar { display: flex; gap: 8px; margin-bottom: 16px; align-items: center; }
+    .toolbar .spacer { flex: 1; }
+
+    .btn { padding: 8px 16px; border-radius: 6px; font-size: 13px; font-weight: 600; border: none; cursor: pointer; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-primary { background: #0f62fe; color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: #0043ce; }
+    .btn-secondary { background: #1e293b; color: #94a3b8; border: 1px solid #1e2d4a; }
+    .btn-secondary:hover:not(:disabled) { background: #2d3a52; color: #e2e8f0; }
+    .btn-danger { background: #991b1b; color: #fca5a5; }
+    .btn-danger:hover:not(:disabled) { background: #7f1d1d; }
+    .btn-success { background: #16a34a; color: #fff; }
+    .btn-success:hover:not(:disabled) { background: #15803d; }
+    .btn-sm { padding: 5px 10px; font-size: 11px; }
+
+    .job-card { background: #141d35; border: 1px solid #1e2d4a; border-radius: 10px; padding: 16px 20px; margin-bottom: 10px; transition: border-color 0.2s; }
+    .job-card:hover { border-color: #334155; }
+    .job-card.disabled { opacity: 0.55; }
+    .job-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+    .job-name { font-size: 15px; font-weight: 600; color: #e2e8f0; }
+    .badge { padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; }
+    .badge.fixed { background: #1e3a5f; color: #60a5fa; }
+    .badge.smart { background: #3b1f4e; color: #c084fc; }
+    .badge.enabled { background: #14532d; color: #4ade80; }
+    .badge.disabled-badge { background: #422006; color: #facc15; }
+    .job-cron { font-size: 12px; color: #64748b; font-family: monospace; margin-left: auto; }
+    .job-prompt { font-size: 13px; color: #94a3b8; line-height: 1.5; margin-bottom: 10px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .job-prompt.expanded { -webkit-line-clamp: unset; }
+    .job-actions { display: flex; gap: 6px; align-items: center; }
+
+    .empty-state { text-align: center; padding: 60px 20px; color: #475569; }
+    .empty-state p { font-size: 14px; }
+
+    /* Modal */
+    .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); z-index: 100; align-items: center; justify-content: center; }
+    .modal-overlay.show { display: flex; }
+    .modal { background: #141d35; border: 1px solid #1e2d4a; border-radius: 12px; padding: 24px; width: 560px; max-width: 95vw; max-height: 90vh; overflow-y: auto; }
+    .modal h2 { font-size: 16px; font-weight: 600; color: #e2e8f0; margin-bottom: 16px; }
+    .form-group { margin-bottom: 14px; }
+    .form-group label { display: block; font-size: 12px; font-weight: 600; color: #94a3b8; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.3px; }
+    .form-group input, .form-group select, .form-group textarea {
+      width: 100%; padding: 8px 12px; background: #0c162f; border: 1px solid #1e2d4a; border-radius: 6px;
+      color: #e2e8f0; font-size: 13px; font-family: inherit;
+    }
+    .form-group input:focus, .form-group select:focus, .form-group textarea:focus { outline: none; border-color: #0f62fe; }
+    .form-group textarea { min-height: 100px; resize: vertical; }
+    .form-row { display: flex; gap: 12px; }
+    .form-row .form-group { flex: 1; }
+    .form-hint { font-size: 11px; color: #475569; margin-top: 2px; }
+    .form-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; }
+
+    .msg { font-size: 12px; min-height: 16px; margin-bottom: 8px; }
+    .msg.ok { color: #4ade80; }
+    .msg.err { color: #fca5a5; }
+
+    /* Triage log */
+    .triage-section { margin-top: 24px; }
+    .triage-section h2 { font-size: 14px; font-weight: 600; color: #94a3b8; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.3px; }
+    .triage-table { width: 100%; border-collapse: collapse; }
+    .triage-table th { color: #64748b; font-weight: 600; font-size: 11px; text-transform: uppercase; padding: 6px 10px; text-align: left; border-bottom: 1px solid #1e2d4a; }
+    .triage-table td { color: #cbd5e1; padding: 6px 10px; font-size: 12px; border-bottom: 1px solid #0c162f; }
+    .triage-table tr:hover td { background: #1e293b; }
+    .triage-acted { color: #4ade80; }
+    .triage-skipped { color: #64748b; }
+
+    .toggle { position: relative; display: inline-block; width: 36px; height: 20px; }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .toggle .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background: #334155; border-radius: 20px; transition: 0.2s; }
+    .toggle .slider::before { content: ''; position: absolute; height: 14px; width: 14px; left: 3px; bottom: 3px; background: #94a3b8; border-radius: 50%; transition: 0.2s; }
+    .toggle input:checked + .slider { background: #0f62fe; }
+    .toggle input:checked + .slider::before { transform: translateX(16px); background: #fff; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Heartbeat Manager</h1>
+    <div class="nav-links">
+      <a class="nav-link" href="/ui/chat.html">Chat</a>
+      <a class="nav-link" href="/ui/skills.html">Skills</a>
+      <a class="nav-link" href="/ui/hub.html">Hub</a>
+      <a class="nav-link" href="/ui/approvals.html">Approvals</a>
+      <a class="nav-link active" href="/ui/heartbeat.html">Heartbeat</a>
+      <a class="nav-link" href="/ui/security.html">Security</a>
+      <a class="nav-link" href="/ui/setup.html">Setup</a>
+    </div>
+  </div>
+
+  <div class="container">
+    <div id="msg" class="msg"></div>
+
+    <div class="toolbar">
+      <span style="font-size:13px;color:#64748b" id="job-count">0 jobs</span>
+      <div class="spacer"></div>
+      <button class="btn btn-secondary btn-sm" onclick="reloadAll()">Reload All</button>
+      <button class="btn btn-primary" onclick="openModal()">+ New Job</button>
+    </div>
+
+    <div id="jobs-list"></div>
+
+    <div class="triage-section">
+      <h2>Recent Triage Log</h2>
+      <table class="triage-table">
+        <thead><tr><th>Time</th><th>Job</th><th>Mode</th><th>Acted</th><th>Reason</th><th>Duration</th></tr></thead>
+        <tbody id="triage-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Create / Edit Modal -->
+  <div class="modal-overlay" id="modal">
+    <div class="modal">
+      <h2 id="modal-title">New Heartbeat Job</h2>
+      <div class="form-group">
+        <label>Name</label>
+        <input id="f-name" placeholder="my-monitor" />
+        <div class="form-hint">Unique identifier, lowercase with hyphens</div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Schedule</label>
+          <input id="f-cron" placeholder="every 10m" />
+          <div class="form-hint">e.g. "every 5m", "every 1h", "every 30s"</div>
+        </div>
+        <div class="form-group">
+          <label>Mode</label>
+          <select id="f-mode">
+            <option value="fixed">Fixed</option>
+            <option value="smart">Smart (triage first)</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Prompt</label>
+        <textarea id="f-prompt" placeholder="You are a monitoring agent. Look for..."></textarea>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Scan Window (smart mode)</label>
+          <input id="f-window" type="number" value="7200000" />
+          <div class="form-hint">Milliseconds — how far back smart mode looks (default 2h)</div>
+        </div>
+        <div class="form-group" style="display:flex;align-items:flex-end;padding-bottom:20px;gap:8px">
+          <label class="toggle">
+            <input type="checkbox" id="f-enabled" checked />
+            <span class="slider"></span>
+          </label>
+          <span style="font-size:12px;color:#94a3b8">Enabled</span>
+        </div>
+      </div>
+      <div class="form-actions">
+        <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" id="modal-save" onclick="saveJob()">Create Job</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let allJobs = [];
+    let editingJob = null; // null = create mode, string = job name being edited
+
+    function getToken() { return localStorage.getItem('secureclaw_api_token') || ''; }
+    function headers(json = true) {
+      const h = {};
+      const t = getToken();
+      if (t) h['x-api-token'] = t;
+      if (json) h['Content-Type'] = 'application/json';
+      return h;
+    }
+
+    function showMsg(text, ok) {
+      const el = document.getElementById('msg');
+      el.textContent = text;
+      el.className = 'msg ' + (ok ? 'ok' : 'err');
+      setTimeout(() => { el.textContent = ''; el.className = 'msg'; }, 4000);
+    }
+
+    /* ─── Load jobs ─── */
+    async function loadJobs() {
+      try {
+        const r = await fetch('/api/heartbeat/jobs', { headers: headers(false) });
+        const d = await r.json();
+        allJobs = d.jobs || [];
+        document.getElementById('job-count').textContent = `${allJobs.length} job${allJobs.length !== 1 ? 's' : ''}`;
+        renderJobs();
+      } catch { showMsg('Failed to load jobs', false); }
+    }
+
+    function renderJobs() {
+      const el = document.getElementById('jobs-list');
+      if (!allJobs.length) {
+        el.innerHTML = '<div class="empty-state"><p>No heartbeat jobs configured. Click "+ New Job" to create one.</p></div>';
+        return;
+      }
+      el.innerHTML = allJobs.map(j => `
+        <div class="job-card ${j.enabled === false ? 'disabled' : ''}">
+          <div class="job-header">
+            <span class="job-name">${esc(j.name)}</span>
+            <span class="badge ${j.mode || 'fixed'}">${j.mode || 'fixed'}</span>
+            <span class="badge ${j.enabled !== false ? 'enabled' : 'disabled-badge'}">${j.enabled !== false ? 'enabled' : 'disabled'}</span>
+            <span class="job-cron">${esc(j.cron)}</span>
+          </div>
+          <div class="job-prompt" onclick="this.classList.toggle('expanded')">${esc(j.prompt)}</div>
+          <div class="job-actions">
+            <button class="btn btn-secondary btn-sm" onclick="editJob('${esc(j.name)}')">Edit</button>
+            <button class="btn btn-success btn-sm" onclick="triggerJob('${esc(j.name)}')" ${j.enabled === false ? 'disabled' : ''}>Trigger Now</button>
+            <button class="btn btn-secondary btn-sm" onclick="toggleJob('${esc(j.name)}', ${j.enabled === false})">${j.enabled === false ? 'Enable' : 'Disable'}</button>
+            <button class="btn btn-danger btn-sm" onclick="deleteJob('${esc(j.name)}')">Delete</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+    /* ─── Actions ─── */
+    async function toggleJob(name, enable) {
+      const r = await fetch(`/api/heartbeat/jobs/${encodeURIComponent(name)}`, {
+        method: 'PUT', headers: headers(), body: JSON.stringify({ enabled: enable })
+      });
+      const d = await r.json();
+      if (d.ok) { showMsg(`${name} ${enable ? 'enabled' : 'disabled'}`, true); loadJobs(); }
+      else showMsg(d.error, false);
+    }
+
+    async function triggerJob(name) {
+      showMsg(`Triggering "${name}"...`, true);
+      try {
+        const r = await fetch(`/api/heartbeat/jobs/${encodeURIComponent(name)}/trigger`, {
+          method: 'POST', headers: headers()
+        });
+        const d = await r.json();
+        if (d.ok) showMsg(`"${name}" triggered — ${d.result || '(no output)'}`, true);
+        else showMsg(d.error, false);
+      } catch (e) { showMsg('Trigger failed: ' + e.message, false); }
+    }
+
+    async function deleteJob(name) {
+      if (!confirm(`Delete heartbeat job "${name}"?`)) return;
+      const r = await fetch(`/api/heartbeat/jobs/${encodeURIComponent(name)}`, {
+        method: 'DELETE', headers: headers()
+      });
+      const d = await r.json();
+      if (d.ok) { showMsg(`"${name}" deleted`, true); loadJobs(); }
+      else showMsg(d.error, false);
+    }
+
+    async function reloadAll() {
+      const r = await fetch('/api/heartbeat/reload', { method: 'POST', headers: headers() });
+      const d = await r.json();
+      if (d.ok) { showMsg(d.message, true); loadJobs(); }
+      else showMsg(d.error, false);
+    }
+
+    /* ─── Modal ─── */
+    function openModal(job) {
+      editingJob = job ? job.name : null;
+      document.getElementById('modal-title').textContent = job ? `Edit: ${job.name}` : 'New Heartbeat Job';
+      document.getElementById('modal-save').textContent = job ? 'Save Changes' : 'Create Job';
+      document.getElementById('f-name').value = job ? job.name : '';
+      document.getElementById('f-name').disabled = !!job;
+      document.getElementById('f-cron').value = job ? job.cron : '';
+      document.getElementById('f-mode').value = job ? (job.mode || 'fixed') : 'fixed';
+      document.getElementById('f-prompt').value = job ? job.prompt : '';
+      document.getElementById('f-window').value = job ? (job.scanWindowMs || 7200000) : 7200000;
+      document.getElementById('f-enabled').checked = job ? job.enabled !== false : true;
+      document.getElementById('modal').classList.add('show');
+    }
+
+    function closeModal() { document.getElementById('modal').classList.remove('show'); }
+
+    function editJob(name) {
+      const job = allJobs.find(j => j.name === name);
+      if (job) openModal(job);
+    }
+
+    async function saveJob() {
+      const payload = {
+        name: document.getElementById('f-name').value.trim(),
+        cron: document.getElementById('f-cron').value.trim(),
+        prompt: document.getElementById('f-prompt').value.trim(),
+        mode: document.getElementById('f-mode').value,
+        scanWindowMs: parseInt(document.getElementById('f-window').value) || 7200000,
+        enabled: document.getElementById('f-enabled').checked,
+      };
+
+      if (!payload.name || !payload.cron || !payload.prompt) {
+        return showMsg('Name, schedule, and prompt are required', false);
+      }
+
+      const url = editingJob
+        ? `/api/heartbeat/jobs/${encodeURIComponent(editingJob)}`
+        : '/api/heartbeat/jobs';
+      const method = editingJob ? 'PUT' : 'POST';
+
+      const r = await fetch(url, { method, headers: headers(), body: JSON.stringify(payload) });
+      const d = await r.json();
+      if (d.ok) {
+        showMsg(editingJob ? 'Job updated' : 'Job created', true);
+        closeModal();
+        loadJobs();
+      } else {
+        showMsg(d.error, false);
+      }
+    }
+
+    /* ─── Triage log ─── */
+    async function loadTriage() {
+      try {
+        const r = await fetch('/api/heartbeat/triage-log?limit=20', { headers: headers(false) });
+        const d = await r.json();
+        const tbody = document.getElementById('triage-body');
+        if (!d.entries?.length) {
+          tbody.innerHTML = '<tr><td colspan="6" style="color:#475569;text-align:center;padding:20px">No triage entries yet</td></tr>';
+          return;
+        }
+        tbody.innerHTML = d.entries.map(e => `
+          <tr>
+            <td>${new Date(e.ts).toLocaleString()}</td>
+            <td>${esc(e.job)}</td>
+            <td><span class="badge ${e.mode}">${e.mode}</span></td>
+            <td class="${e.acted ? 'triage-acted' : 'triage-skipped'}">${e.acted ? 'Yes' : 'No'}</td>
+            <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(e.reason)}">${esc(e.reason)}</td>
+            <td>${e.durationMs ? (e.durationMs / 1000).toFixed(1) + 's' : '-'}</td>
+          </tr>
+        `).join('');
+      } catch {}
+    }
+
+    /* ─── Init ─── */
+    loadJobs();
+    loadTriage();
+
+    // Close modal on overlay click
+    document.getElementById('modal').addEventListener('click', e => {
+      if (e.target === e.currentTarget) closeModal();
+    });
+
+    // Close modal on Escape
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+  </script>
+</body>
+</html>

@@ -1,10 +1,12 @@
 /**
- * Per-user quota tracking for LLM calls and expensive skill usage.
- * Prevents a single user from exhausting API budgets.
+ * Per-user quota tracking backed by SQLite.
+ * Persists across restarts. Sliding 1-hour window.
  *
  * Defaults: 100 LLM calls/hour, 20 expensive skill calls/hour per user.
  * Configurable via env: USER_QUOTA_LLM, USER_QUOTA_EXPENSIVE.
  */
+
+import { getDb } from "../db.js";
 
 export interface QuotaConfig {
   llmCallsPerHour: number;
@@ -22,11 +24,6 @@ export interface QuotaStatus {
   resetInMs: number;
 }
 
-interface UserBucket {
-  llmCalls: number[];
-  expensiveCalls: number[];
-}
-
 const EXPENSIVE_SKILLS = new Set([
   "browser_skill",
   "image_gen_skill",
@@ -42,37 +39,45 @@ const config: QuotaConfig = {
   expensiveSkillsPerHour: Number(process.env.USER_QUOTA_EXPENSIVE) || 20,
 };
 
-const buckets = new Map<string, UserBucket>();
-
-function getBucket(userId: string): UserBucket {
-  let b = buckets.get(userId);
-  if (!b) {
-    b = { llmCalls: [], expensiveCalls: [] };
-    buckets.set(userId, b);
-  }
-  return b;
+function countRecent(userId: string, kind: string, now: number): number {
+  const db = getDb();
+  const cutoff = now - WINDOW_MS;
+  const row = db.prepare(
+    "SELECT COUNT(*) as cnt FROM quota_events WHERE user_id = ? AND kind = ? AND ts > ?"
+  ).get(userId, kind, cutoff) as any;
+  return row.cnt;
 }
 
-function pruneOld(timestamps: number[], now: number): number[] {
-  return timestamps.filter(t => now - t < WINDOW_MS);
+function oldestTs(userId: string, kind: string, now: number): number | null {
+  const db = getDb();
+  const cutoff = now - WINDOW_MS;
+  const row = db.prepare(
+    "SELECT MIN(ts) as oldest FROM quota_events WHERE user_id = ? AND kind = ? AND ts > ?"
+  ).get(userId, kind, cutoff) as any;
+  return row.oldest ?? null;
+}
+
+function record(userId: string, kind: string, now: number): void {
+  const db = getDb();
+  db.prepare("INSERT INTO quota_events (user_id, kind, ts) VALUES (?, ?, ?)").run(userId, kind, now);
 }
 
 /** Check and record an LLM call. Returns { allowed, remaining }. */
 export function checkLLMQuota(userId: string): { allowed: boolean; remaining: number; resetInMs: number } {
   const now = Date.now();
-  const bucket = getBucket(userId);
-  bucket.llmCalls = pruneOld(bucket.llmCalls, now);
+  const count = countRecent(userId, "llm", now);
 
-  if (bucket.llmCalls.length >= config.llmCallsPerHour) {
-    const oldest = bucket.llmCalls[0];
-    return { allowed: false, remaining: 0, resetInMs: WINDOW_MS - (now - oldest) };
+  if (count >= config.llmCallsPerHour) {
+    const oldest = oldestTs(userId, "llm", now);
+    return { allowed: false, remaining: 0, resetInMs: oldest ? WINDOW_MS - (now - oldest) : WINDOW_MS };
   }
 
-  bucket.llmCalls.push(now);
+  record(userId, "llm", now);
+  const oldest = oldestTs(userId, "llm", now);
   return {
     allowed: true,
-    remaining: config.llmCallsPerHour - bucket.llmCalls.length,
-    resetInMs: bucket.llmCalls.length > 0 ? WINDOW_MS - (now - bucket.llmCalls[0]) : WINDOW_MS,
+    remaining: config.llmCallsPerHour - count - 1,
+    resetInMs: oldest ? WINDOW_MS - (now - oldest) : WINDOW_MS,
   };
 }
 
@@ -83,17 +88,16 @@ export function checkSkillQuota(userId: string, skillName: string): { allowed: b
   }
 
   const now = Date.now();
-  const bucket = getBucket(userId);
-  bucket.expensiveCalls = pruneOld(bucket.expensiveCalls, now);
+  const count = countRecent(userId, "expensive", now);
 
-  if (bucket.expensiveCalls.length >= config.expensiveSkillsPerHour) {
+  if (count >= config.expensiveSkillsPerHour) {
     return { allowed: false, remaining: 0, isExpensive: true };
   }
 
-  bucket.expensiveCalls.push(now);
+  record(userId, "expensive", now);
   return {
     allowed: true,
-    remaining: config.expensiveSkillsPerHour - bucket.expensiveCalls.length,
+    remaining: config.expensiveSkillsPerHour - count - 1,
     isExpensive: true,
   };
 }
@@ -101,43 +105,37 @@ export function checkSkillQuota(userId: string, skillName: string): { allowed: b
 /** Get current quota status for a user. */
 export function getQuotaStatus(userId: string): QuotaStatus {
   const now = Date.now();
-  const bucket = getBucket(userId);
-  bucket.llmCalls = pruneOld(bucket.llmCalls, now);
-  bucket.expensiveCalls = pruneOld(bucket.expensiveCalls, now);
-
-  const oldestLlm = bucket.llmCalls[0];
-  const resetInMs = oldestLlm ? WINDOW_MS - (now - oldestLlm) : WINDOW_MS;
+  const llmCount = countRecent(userId, "llm", now);
+  const expensiveCount = countRecent(userId, "expensive", now);
+  const oldest = oldestTs(userId, "llm", now);
 
   return {
     userId,
-    llmCalls: bucket.llmCalls.length,
+    llmCalls: llmCount,
     llmLimit: config.llmCallsPerHour,
-    llmRemaining: Math.max(0, config.llmCallsPerHour - bucket.llmCalls.length),
-    expensiveCalls: bucket.expensiveCalls.length,
+    llmRemaining: Math.max(0, config.llmCallsPerHour - llmCount),
+    expensiveCalls: expensiveCount,
     expensiveLimit: config.expensiveSkillsPerHour,
-    expensiveRemaining: Math.max(0, config.expensiveSkillsPerHour - bucket.expensiveCalls.length),
-    resetInMs,
+    expensiveRemaining: Math.max(0, config.expensiveSkillsPerHour - expensiveCount),
+    resetInMs: oldest ? WINDOW_MS - (now - oldest) : WINDOW_MS,
   };
 }
 
 /** Get all active user quotas (for admin dashboard). */
 export function getAllQuotas(): QuotaStatus[] {
-  const now = Date.now();
-  const result: QuotaStatus[] = [];
-  for (const userId of buckets.keys()) {
-    result.push(getQuotaStatus(userId));
-  }
-  return result.filter(q => q.llmCalls > 0 || q.expensiveCalls > 0);
+  const db = getDb();
+  const cutoff = Date.now() - WINDOW_MS;
+  const rows = db.prepare(
+    "SELECT DISTINCT user_id FROM quota_events WHERE ts > ?"
+  ).all(cutoff) as any[];
+  return rows.map(r => getQuotaStatus(r.user_id)).filter(q => q.llmCalls > 0 || q.expensiveCalls > 0);
 }
 
-// Clean up stale entries every 10 minutes
+// Clean up old quota events every 10 minutes
 setInterval(() => {
-  const now = Date.now();
-  for (const [userId, bucket] of buckets) {
-    bucket.llmCalls = pruneOld(bucket.llmCalls, now);
-    bucket.expensiveCalls = pruneOld(bucket.expensiveCalls, now);
-    if (bucket.llmCalls.length === 0 && bucket.expensiveCalls.length === 0) {
-      buckets.delete(userId);
-    }
-  }
+  try {
+    const db = getDb();
+    const cutoff = Date.now() - WINDOW_MS;
+    db.prepare("DELETE FROM quota_events WHERE ts < ?").run(cutoff);
+  } catch {}
 }, 600_000).unref();

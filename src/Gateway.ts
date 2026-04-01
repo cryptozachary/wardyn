@@ -11,7 +11,8 @@ import { sendDiscordReply, extractChannelId, startDiscordBot, isDiscordBotRunnin
 import { sendSlackReply, extractSlackChannelId, isSlackBotMessage, isSlackUrlVerification, isSlackMessageEvent, getSlackSigningSecret, verifySlackSignature } from "./channels/slack.js";
 import { loadChannelConfig, saveChannelConfig, getMaskedConfig, clearChannelConfigCache, migrateChannelSecrets } from "./channels/channelConfig.js";
 import { attachWebSocket } from "./channels/websocket.js";
-import { loadHeartbeatConfig, startHeartbeat } from "./orchestrator/heartbeat.js";
+import { loadHeartbeatConfig, startHeartbeat, type HeartbeatController } from "./orchestrator/heartbeat.js";
+import { seedFromJson, listJobs, getJob, createJob, updateJob, deleteJob } from "./orchestrator/heartbeatStore.js";
 import { listSessions, loadSession, cleanExpiredSessions } from "./orchestrator/sessionStore.js";
 import { getProviderName, setProviderName } from "./llm/router.js";
 import { buildSkill } from "./builder/builderAgent.js";
@@ -28,8 +29,12 @@ import { submitForApproval, approveSkill, rejectSkill, listApprovals, getApprova
 import { assertCodeSafe } from "./security/astAnalyzer.js";
 import { upload, fileToAttachment, cleanExpiredUploads, UPLOADS_DIR } from "./uploads/uploadHandler.js";
 import { createServer } from "http";
+import { getDb, closeDb } from "./db.js";
 import dotenv from "dotenv";
 dotenv.config();
+
+// Initialize SQLite database (creates tables on first run)
+getDb();
 
 const app = express();
 app.use(bodyParser.json({
@@ -617,20 +622,111 @@ app.get("/api/security/quotas", requireAuth, (_req, res) => {
 });
 
 app.get("/api/heartbeat/triage-log", requireAuth, (req, res) => {
-  const logFile = path.join(process.cwd(), "logs", "heartbeat-triage.jsonl");
   const limit = Math.min(Number(req.query.limit) || 50, 200);
-  if (!fs.existsSync(logFile)) {
-    return res.json({ ok: true, entries: [], total: 0 });
-  }
+  const offset = Number(req.query.offset) || 0;
   try {
-    const lines = fs.readFileSync(logFile, "utf8").trim().split("\n").filter(Boolean);
-    const entries = lines.slice(-limit).reverse().map(l => {
-      try { return JSON.parse(l); } catch { return null; }
-    }).filter(Boolean);
-    res.json({ ok: true, entries, total: lines.length });
+    const db = getDb();
+    const total = (db.prepare("SELECT COUNT(*) as cnt FROM heartbeat_triage").get() as any).cnt;
+    const rows = db.prepare(
+      "SELECT * FROM heartbeat_triage ORDER BY ts DESC LIMIT ? OFFSET ?"
+    ).all(limit, offset) as any[];
+    const entries = rows.map(r => ({
+      ts: r.ts, job: r.job, mode: r.mode, acted: !!r.acted,
+      reason: r.reason, prompt: r.prompt, durationMs: r.duration_ms,
+      result: r.result, error: r.error,
+    }));
+    res.json({ ok: true, entries, total });
   } catch {
     res.json({ ok: true, entries: [], total: 0 });
   }
+});
+
+/* ───────── Heartbeat Job CRUD ───────── */
+
+app.get("/api/heartbeat/jobs", requireAuth, (req, res) => {
+  const enabledOnly = req.query.enabled === "true";
+  res.json({ ok: true, jobs: listJobs(enabledOnly) });
+});
+
+app.get("/api/heartbeat/jobs/:name", requireAuth, (req, res) => {
+  const job = getJob(req.params.name);
+  if (!job) return res.status(404).json({ ok: false, error: "Job not found" });
+  res.json({ ok: true, job });
+});
+
+app.post("/api/heartbeat/jobs", requireAuth, (req, res) => {
+  const { name, cron, prompt, enabled, mode, scanWindowMs } = req.body;
+  if (!name || !cron || !prompt) {
+    return res.status(400).json({ ok: false, error: "name, cron, and prompt are required" });
+  }
+  if (getJob(name)) {
+    return res.status(409).json({ ok: false, error: `Job "${name}" already exists` });
+  }
+  try {
+    const job = createJob({ name, cron, prompt, enabled, mode, scanWindowMs });
+    // Hot-reload: add to running scheduler
+    if (job.enabled !== false) {
+      if (!heartbeatCtrl) {
+        heartbeatCtrl = startHeartbeat([job], skills, () => getProviderKey());
+      } else {
+        heartbeatCtrl.addJob(job);
+      }
+    }
+    res.status(201).json({ ok: true, job });
+  } catch (err: any) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
+});
+
+app.put("/api/heartbeat/jobs/:name", requireAuth, (req, res) => {
+  const { cron, prompt, enabled, mode, scanWindowMs } = req.body;
+  const updated = updateJob(req.params.name, { cron, prompt, enabled, mode, scanWindowMs });
+  if (!updated) return res.status(404).json({ ok: false, error: "Job not found" });
+
+  // Hot-reload: update the running scheduler
+  if (heartbeatCtrl) {
+    if (updated.enabled === false) {
+      heartbeatCtrl.removeJob(updated.name);
+    } else {
+      heartbeatCtrl.addJob(updated);
+    }
+  } else if (updated.enabled !== false) {
+    heartbeatCtrl = startHeartbeat([updated], skills, () => getProviderKey());
+  }
+  res.json({ ok: true, job: updated });
+});
+
+app.delete("/api/heartbeat/jobs/:name", requireAuth, (req, res) => {
+  const name = req.params.name;
+  if (!deleteJob(name)) return res.status(404).json({ ok: false, error: "Job not found" });
+  heartbeatCtrl?.removeJob(name);
+  res.json({ ok: true });
+});
+
+app.post("/api/heartbeat/jobs/:name/trigger", requireAuth, async (req, res) => {
+  const name = req.params.name;
+  if (!heartbeatCtrl) {
+    return res.status(400).json({ ok: false, error: "Heartbeat scheduler not running" });
+  }
+  try {
+    const result = await heartbeatCtrl.triggerJob(name);
+    res.json({ ok: true, result: result?.final ?? null });
+  } catch (err: any) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
+});
+
+app.post("/api/heartbeat/reload", requireAuth, (_req, res) => {
+  if (heartbeatCtrl) {
+    heartbeatCtrl.reloadAll();
+  } else {
+    const jobs = loadHeartbeatConfig();
+    if (jobs.length > 0) {
+      heartbeatCtrl = startHeartbeat(jobs, skills, () => getProviderKey());
+    }
+  }
+  const jobs = listJobs(true);
+  res.json({ ok: true, message: `Reloaded ${jobs.length} enabled job(s)`, jobs });
 });
 
 app.post("/api/security/clear", requireAuth, (_req, res) => {
@@ -660,10 +756,14 @@ const server = createServer(app);
 // Attach WebSocket control plane
 attachWebSocket(server, skills, () => getProviderKey(), API_TOKEN);
 
-// Start heartbeat scheduler
+// Seed heartbeat jobs from JSON config on first run, then start from SQLite
+const seeded = seedFromJson();
+if (seeded > 0) console.log(`Heartbeat: seeded ${seeded} job(s) from heartbeat.json`);
+
 const heartbeatJobs = loadHeartbeatConfig();
+let heartbeatCtrl: HeartbeatController | null = null;
 if (heartbeatJobs.length > 0) {
-  startHeartbeat(heartbeatJobs, skills, () => getProviderKey());
+  heartbeatCtrl = startHeartbeat(heartbeatJobs, skills, () => getProviderKey());
 }
 
 // Start Discord gateway bot
@@ -694,3 +794,13 @@ server.listen(PORT, HOST, () => {
     console.log(`Heartbeat: ${heartbeatJobs.length} job(s) scheduled`);
   }
 });
+
+// Graceful shutdown — stop heartbeat timers and close SQLite
+for (const sig of ["SIGINT", "SIGTERM"] as const) {
+  process.on(sig, () => {
+    console.log(`\n[shutdown] Received ${sig}, shutting down...`);
+    heartbeatCtrl?.shutdown();
+    closeDb();
+    process.exit(0);
+  });
+}

@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from "fs";
 import { createHash } from "crypto";
 import path from "path";
-import type { ClawPackage, HubRegistry, HubRegistryEntry } from "./hubTypes.js";
+import type { ClawPackage, HubRegistryEntry } from "./hubTypes.js";
 import { writeSkill, deleteSkill, isProtected, skillExists, sanitizeName } from "../builder/skillWriter.js";
 import { assertSafe } from "../security/safetySpine.js";
 import { assertCodeSafe } from "../security/astAnalyzer.js";
@@ -11,9 +11,9 @@ import { loadSkills } from "../skills/loader.js";
 import type { BuilderResult } from "../builder/types.js";
 import { checkSSRF } from "../security/ssrfGuard.js";
 import { createSignedManifest, verifySkillCode } from "../security/skillSigning.js";
+import { getDb } from "../db.js";
 
 const HUB_DIR = path.join(process.cwd(), "hub");
-const REGISTRY_FILE = path.join(HUB_DIR, "registry.json");
 
 function ensureHubDir(): void {
   if (!existsSync(HUB_DIR)) mkdirSync(HUB_DIR, { recursive: true });
@@ -28,22 +28,6 @@ function detectLanguage(skillDir: string): string {
   if (existsSync(path.join(skillDir, "main.go"))) return "go";
   if (existsSync(path.join(skillDir, "main.cpp"))) return "cpp";
   return "typescript";
-}
-
-function readRegistry(): HubRegistry {
-  if (!existsSync(REGISTRY_FILE)) {
-    return { instanceName: "SecureClaw", packages: [] };
-  }
-  try {
-    return JSON.parse(readFileSync(REGISTRY_FILE, "utf8"));
-  } catch {
-    return { instanceName: "SecureClaw", packages: [] };
-  }
-}
-
-function writeRegistry(registry: HubRegistry): void {
-  ensureHubDir();
-  writeFileSync(REGISTRY_FILE, JSON.stringify(registry, null, 2), "utf8");
 }
 
 export function exportSkill(skillName: string, author: string, version = "1.0.0"): ClawPackage {
@@ -106,17 +90,17 @@ export function exportSkill(skillName: string, author: string, version = "1.0.0"
   ensureHubDir();
   writeFileSync(path.join(HUB_DIR, fileName), JSON.stringify(pkg, null, 2), "utf8");
 
-  // Update registry
-  const registry = readRegistry();
-  const idx = registry.packages.findIndex(p => p.name === name);
-  const entry: HubRegistryEntry = {
-    name, version, language,
-    description: pkg.description,
-    author, exportedAt, fileName, checksum,
-  };
-  if (idx >= 0) registry.packages[idx] = entry;
-  else registry.packages.push(entry);
-  writeRegistry(registry);
+  // Update registry in SQLite
+  const db = getDb();
+  db.prepare(`
+    INSERT INTO hub_packages (name, version, language, description, author, exported_at, file_name, checksum)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(name) DO UPDATE SET
+      version = excluded.version, language = excluded.language,
+      description = excluded.description, author = excluded.author,
+      exported_at = excluded.exported_at, file_name = excluded.file_name,
+      checksum = excluded.checksum
+  `).run(name, version, language, pkg.description, author, exportedAt, fileName, checksum);
 
   return pkg;
 }
@@ -231,15 +215,21 @@ export async function importFromUrl(
 }
 
 export function listPackages(): HubRegistryEntry[] {
-  return readRegistry().packages;
+  const db = getDb();
+  const rows = db.prepare("SELECT * FROM hub_packages ORDER BY name").all() as any[];
+  return rows.map(r => ({
+    name: r.name, version: r.version, language: r.language,
+    description: r.description, author: r.author,
+    exportedAt: r.exported_at, fileName: r.file_name, checksum: r.checksum,
+  }));
 }
 
 export function getPackage(name: string): ClawPackage | null {
-  const registry = readRegistry();
-  const entry = registry.packages.find(p => p.name === name);
+  const db = getDb();
+  const entry = db.prepare("SELECT file_name FROM hub_packages WHERE name = ?").get(name) as any;
   if (!entry) return null;
 
-  const filePath = path.join(HUB_DIR, entry.fileName);
+  const filePath = path.join(HUB_DIR, entry.file_name);
   if (!existsSync(filePath)) return null;
 
   try {
@@ -250,14 +240,12 @@ export function getPackage(name: string): ClawPackage | null {
 }
 
 export function deletePackage(name: string): void {
-  const registry = readRegistry();
-  const idx = registry.packages.findIndex(p => p.name === name);
-  if (idx < 0) throw new Error(`Package "${name}" not found in registry`);
+  const db = getDb();
+  const entry = db.prepare("SELECT file_name FROM hub_packages WHERE name = ?").get(name) as any;
+  if (!entry) throw new Error(`Package "${name}" not found in registry`);
 
-  const entry = registry.packages[idx];
-  const filePath = path.join(HUB_DIR, entry.fileName);
+  const filePath = path.join(HUB_DIR, entry.file_name);
   if (existsSync(filePath)) rmSync(filePath);
 
-  registry.packages.splice(idx, 1);
-  writeRegistry(registry);
+  db.prepare("DELETE FROM hub_packages WHERE name = ?").run(name);
 }

@@ -1,21 +1,19 @@
 /**
  * Skill Approval Queue — newly built or imported skills land in a pending
- * state and require manual approval before they're activated (loaded into
- * the runtime skill set). Approved skills are moved from `skills_pending/`
- * to `skills/` and compiled to `dist/skills/`.
+ * state and require manual approval before they're activated.
  *
- * Storage: `config/approvals.json` — a flat list of ApprovalRequest entries.
+ * Storage: SQLite `approvals` table (replaces config/approvals.json).
+ * Pending skill files still live in `skills_pending/` on disk.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, cpSync, rmSync, readdirSync } from "fs";
+import { existsSync, writeFileSync, mkdirSync, rmSync } from "fs";
 import path from "path";
 import { randomUUID } from "crypto";
 import type { BuilderResult } from "../builder/types.js";
-import { writeSkill, deleteSkill } from "../builder/skillWriter.js";
+import { writeSkill } from "../builder/skillWriter.js";
 import type { ASTWarning } from "./astAnalyzer.js";
+import { getDb } from "../db.js";
 
-const CONFIG_DIR = path.join(process.cwd(), "config");
-const APPROVALS_FILE = path.join(CONFIG_DIR, "approvals.json");
 const PENDING_DIR = path.join(process.cwd(), "skills_pending");
 
 /* ───────── Types ───────── */
@@ -43,64 +41,51 @@ export interface ApprovalRequest {
 
 /* ───────── Helpers ───────── */
 
-function ensureDirs(): void {
-  if (!existsSync(CONFIG_DIR)) mkdirSync(CONFIG_DIR, { recursive: true });
+function ensurePendingDir(): void {
   if (!existsSync(PENDING_DIR)) mkdirSync(PENDING_DIR, { recursive: true });
 }
 
-function loadQueue(): ApprovalRequest[] {
-  if (!existsSync(APPROVALS_FILE)) return [];
-  try {
-    return JSON.parse(readFileSync(APPROVALS_FILE, "utf8"));
-  } catch {
-    return [];
-  }
-}
-
-function saveQueue(queue: ApprovalRequest[]): void {
-  ensureDirs();
-  writeFileSync(APPROVALS_FILE, JSON.stringify(queue, null, 2), "utf8");
+function rowToApproval(r: any): ApprovalRequest {
+  return {
+    id: r.id,
+    type: r.type,
+    skillName: r.skill_name,
+    language: r.language,
+    description: r.description,
+    code: r.code,
+    wrapperCode: r.wrapper_code ?? undefined,
+    skillMd: r.skill_md,
+    parameters: JSON.parse(r.parameters),
+    secrets: r.secrets ? JSON.parse(r.secrets) : undefined,
+    sampleArgs: r.sample_args ? JSON.parse(r.sample_args) : undefined,
+    author: r.author ?? undefined,
+    requestedAt: r.requested_at,
+    status: r.status,
+    reviewedAt: r.reviewed_at ?? undefined,
+    rejectReason: r.reject_reason ?? undefined,
+    astWarnings: r.ast_warnings ? JSON.parse(r.ast_warnings) : undefined,
+    validationOutput: r.validation_output ?? undefined,
+  };
 }
 
 /* ───────── Public API ───────── */
 
-/**
- * Submit a newly built skill for approval.
- * Writes skill files to `skills_pending/{name}/` instead of `skills/`.
- */
 export function submitForApproval(
   result: BuilderResult,
   type: "build" | "import",
   astWarnings?: ASTWarning[],
   author?: string
 ): ApprovalRequest {
-  ensureDirs();
+  ensurePendingDir();
 
-  const request: ApprovalRequest = {
-    id: randomUUID(),
-    type,
-    skillName: result.name,
-    language: result.language,
-    description: result.description,
-    code: result.code,
-    wrapperCode: result.wrapperCode,
-    skillMd: result.skillMd,
-    parameters: result.parameters,
-    secrets: result.secrets,
-    sampleArgs: result.sampleArgs,
-    author,
-    requestedAt: Date.now(),
-    status: "pending",
-    astWarnings,
-    validationOutput: result.validationOutput,
-  };
+  const id = randomUUID();
+  const now = Date.now();
 
   // Write skill files to pending directory for review
   const pendingSkillDir = path.join(PENDING_DIR, result.name);
   if (!existsSync(pendingSkillDir)) mkdirSync(pendingSkillDir, { recursive: true });
 
   const LANGUAGE_FILES: Record<string, string> = { python: "main.py", go: "main.go", cpp: "main.cpp" };
-
   const indexContent = result.wrapperCode ?? result.code;
   writeFileSync(path.join(pendingSkillDir, "index.ts"), indexContent, "utf8");
   writeFileSync(path.join(pendingSkillDir, "SKILL.md"), result.skillMd, "utf8");
@@ -112,34 +97,43 @@ export function submitForApproval(
     }
   }
 
-  // Persist to queue
-  const queue = loadQueue();
-  queue.push(request);
-  saveQueue(queue);
+  // Persist to SQLite
+  const db = getDb();
+  db.prepare(`
+    INSERT INTO approvals
+      (id, type, skill_name, language, description, code, wrapper_code, skill_md,
+       parameters, secrets, sample_args, author, requested_at, status, ast_warnings, validation_output)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+  `).run(
+    id, type, result.name, result.language, result.description, result.code,
+    result.wrapperCode ?? null, result.skillMd,
+    JSON.stringify(result.parameters), result.secrets ? JSON.stringify(result.secrets) : null,
+    result.sampleArgs ? JSON.stringify(result.sampleArgs) : null,
+    author ?? null, now,
+    astWarnings ? JSON.stringify(astWarnings) : null,
+    result.validationOutput ?? null,
+  );
 
-  return request;
+  return rowToApproval(
+    db.prepare("SELECT * FROM approvals WHERE id = ?").get(id)
+  );
 }
 
-/**
- * Approve a pending skill — moves from pending to active.
- */
 export function approveSkill(approvalId: string): { ok: boolean; error?: string } {
-  const queue = loadQueue();
-  const idx = queue.findIndex(r => r.id === approvalId);
-  if (idx < 0) return { ok: false, error: "Approval request not found" };
+  const db = getDb();
+  const row = db.prepare("SELECT * FROM approvals WHERE id = ?").get(approvalId) as any;
+  if (!row) return { ok: false, error: "Approval request not found" };
 
-  const request = queue[idx];
+  const request = rowToApproval(row);
   if (request.status !== "pending") {
     return { ok: false, error: `Skill is already ${request.status}` };
   }
 
-  // Move files from pending to active
   const pendingDir = path.join(PENDING_DIR, request.skillName);
   if (!existsSync(pendingDir)) {
     return { ok: false, error: "Pending skill files not found on disk" };
   }
 
-  // Use writeSkill to properly install (includes compilation to dist/)
   const builderResult: BuilderResult = {
     name: request.skillName,
     language: request.language,
@@ -161,84 +155,62 @@ export function approveSkill(approvalId: string): { ok: boolean; error?: string 
     return { ok: false, error: `Failed to install skill: ${err.message}` };
   }
 
-  // Clean up pending directory
   try { rmSync(pendingDir, { recursive: true, force: true }); } catch {}
 
-  // Update status
-  request.status = "approved";
-  request.reviewedAt = Date.now();
-  queue[idx] = request;
-  saveQueue(queue);
+  db.prepare("UPDATE approvals SET status = 'approved', reviewed_at = ? WHERE id = ?")
+    .run(Date.now(), approvalId);
 
   return { ok: true };
 }
 
-/**
- * Reject a pending skill — removes pending files.
- */
 export function rejectSkill(approvalId: string, reason?: string): { ok: boolean; error?: string } {
-  const queue = loadQueue();
-  const idx = queue.findIndex(r => r.id === approvalId);
-  if (idx < 0) return { ok: false, error: "Approval request not found" };
+  const db = getDb();
+  const row = db.prepare("SELECT * FROM approvals WHERE id = ?").get(approvalId) as any;
+  if (!row) return { ok: false, error: "Approval request not found" };
 
-  const request = queue[idx];
-  if (request.status !== "pending") {
-    return { ok: false, error: `Skill is already ${request.status}` };
+  if (row.status !== "pending") {
+    return { ok: false, error: `Skill is already ${row.status}` };
   }
 
-  // Remove pending files
-  const pendingDir = path.join(PENDING_DIR, request.skillName);
+  const pendingDir = path.join(PENDING_DIR, row.skill_name);
   try { rmSync(pendingDir, { recursive: true, force: true }); } catch {}
 
-  // Update status
-  request.status = "rejected";
-  request.reviewedAt = Date.now();
-  request.rejectReason = reason;
-  queue[idx] = request;
-  saveQueue(queue);
+  db.prepare("UPDATE approvals SET status = 'rejected', reviewed_at = ?, reject_reason = ? WHERE id = ?")
+    .run(Date.now(), reason ?? null, approvalId);
 
   return { ok: true };
 }
 
-/**
- * Get all approval requests, optionally filtered by status.
- */
 export function listApprovals(status?: "pending" | "approved" | "rejected"): ApprovalRequest[] {
-  const queue = loadQueue();
-  if (!status) return queue;
-  return queue.filter(r => r.status === status);
+  const db = getDb();
+  if (!status) {
+    return (db.prepare("SELECT * FROM approvals ORDER BY requested_at DESC").all() as any[]).map(rowToApproval);
+  }
+  return (db.prepare("SELECT * FROM approvals WHERE status = ? ORDER BY requested_at DESC").all(status) as any[]).map(rowToApproval);
 }
 
-/**
- * Get a single approval request by ID.
- */
 export function getApproval(id: string): ApprovalRequest | null {
-  const queue = loadQueue();
-  return queue.find(r => r.id === id) ?? null;
+  const db = getDb();
+  const row = db.prepare("SELECT * FROM approvals WHERE id = ?").get(id) as any;
+  return row ? rowToApproval(row) : null;
 }
 
-/**
- * Check if approval queue is enabled.
- * Can be disabled via SKIP_APPROVAL=true env var for development.
- */
 export function isApprovalRequired(): boolean {
   return process.env.SKIP_APPROVAL !== "true";
 }
 
-/**
- * Clean up old approved/rejected entries (keep last 100).
- */
 export function pruneApprovals(): number {
-  const queue = loadQueue();
-  const pending = queue.filter(r => r.status === "pending");
-  const resolved = queue.filter(r => r.status !== "pending");
+  const db = getDb();
+  const total = (db.prepare("SELECT COUNT(*) as cnt FROM approvals WHERE status != 'pending'").get() as any).cnt;
+  if (total <= 100) return 0;
 
-  if (resolved.length <= 100) return 0;
-
-  // Keep newest 100 resolved entries
-  const sorted = resolved.sort((a, b) => (b.reviewedAt ?? 0) - (a.reviewedAt ?? 0));
-  const pruned = resolved.length - 100;
-  const kept = [...pending, ...sorted.slice(0, 100)];
-  saveQueue(kept);
+  const pruned = total - 100;
+  db.prepare(`
+    DELETE FROM approvals WHERE id IN (
+      SELECT id FROM approvals WHERE status != 'pending'
+      ORDER BY reviewed_at DESC
+      LIMIT -1 OFFSET 100
+    )
+  `).run();
   return pruned;
 }

@@ -1,12 +1,8 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, unlinkSync, copyFileSync } from "fs";
-import path from "path";
+import { getDb } from "../db.js";
 import { callLLM } from "../llm/router.js";
-import { signSession, verifySession, validateSessionStructure, repairSession } from "../security/sessionIntegrity.js";
-import { encryptSession, decryptSession } from "../security/sessionEncryption.js";
 
-const SESSIONS_DIR = path.join(process.cwd(), "sessions");
-const MAX_MESSAGES = 40; // summarize when history exceeds this
-const MAX_SESSIONS = 200; // evict oldest sessions beyond this
+const MAX_MESSAGES = 40;
+const MAX_SESSIONS = 200;
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 export interface SessionMessage {
@@ -26,92 +22,39 @@ export interface Session {
   updatedAt: number;
 }
 
-function ensureDir() {
-  mkdirSync(SESSIONS_DIR, { recursive: true });
-}
-
-function sessionPath(sessionId: string): string {
-  const safe = sessionId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
-  return path.join(SESSIONS_DIR, `${safe}.json`);
-}
-
 export function loadSession(sessionId: string): Session | null {
-  const p = sessionPath(sessionId);
-  if (!existsSync(p)) return null;
-  const backupPath = p.replace(".json", ".backup.json");
-  let data: any;
-  try {
-    const raw = readFileSync(p);
-    const json = decryptSession(raw);
-    data = JSON.parse(json);
-  } catch {
-    // Primary file corrupted or decryption failed -- try backup
-    if (existsSync(backupPath)) {
-      try {
-        const backupRaw = readFileSync(backupPath);
-        const backupJson = decryptSession(backupRaw);
-        data = JSON.parse(backupJson);
-        console.warn(`[session] Recovered ${sessionId} from backup (primary corrupted)`);
-      } catch {
-        return null;
-      }
-    } else {
-      return null;
-    }
-  }
-
-  // Verify HMAC integrity
-  const integrity = verifySession(data);
-  if (!integrity.valid) {
-    console.warn(`[session] Integrity check failed for ${sessionId}: ${integrity.reason}`);
-    // Try backup
-    if (existsSync(backupPath)) {
-      try {
-        const backupRaw = readFileSync(backupPath);
-        const backupJson = decryptSession(backupRaw);
-        const backupData = JSON.parse(backupJson);
-        const backupIntegrity = verifySession(backupData);
-        if (backupIntegrity.valid) {
-          console.warn(`[session] Recovered ${sessionId} from backup (HMAC mismatch on primary)`);
-          data = backupData;
-        }
-      } catch {}
-    }
-  }
-
-  // Validate structure and repair if needed
-  const issues = validateSessionStructure(data);
-  if (issues.length > 0) {
-    console.warn(`[session] Structure issues in ${sessionId}: ${issues.join(", ")}`);
-    const repaired = repairSession(data, sessionId);
-    if (!repaired) return null;
-    data = repaired;
-    // Save repaired version (encrypted)
-    const signed = signSession(data);
-    writeFileSync(p, encryptSession(JSON.stringify(signed)));
-  }
-
-  // Re-sign and encrypt legacy unsigned sessions
-  if (integrity.reason === "legacy_unsigned") {
-    const signed = signSession(data);
-    writeFileSync(p, encryptSession(JSON.stringify(signed)));
-  }
-
-  return data as Session;
+  const db = getDb();
+  const row = db.prepare("SELECT * FROM sessions WHERE id = ?").get(sessionId) as any;
+  if (!row) return null;
+  return {
+    id: row.id,
+    userId: row.user_id,
+    summary: row.summary,
+    messages: JSON.parse(row.messages),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
 }
 
 export function saveSession(session: Session): void {
-  ensureDir();
   session.updatedAt = Date.now();
-  const p = sessionPath(session.id);
-  // Create backup of current file before overwriting
-  if (existsSync(p)) {
-    const backupPath = p.replace(".json", ".backup.json");
-    try { copyFileSync(p, backupPath); } catch {}
-  }
-  const signed = signSession(session as any);
-  const encrypted = encryptSession(JSON.stringify(signed));
-  writeFileSync(p, encrypted);
+  const db = getDb();
+  db.prepare(`
+    INSERT INTO sessions (id, user_id, summary, messages, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      user_id    = excluded.user_id,
+      summary    = excluded.summary,
+      messages   = excluded.messages,
+      updated_at = excluded.updated_at
+  `).run(
+    session.id,
+    session.userId,
+    session.summary,
+    JSON.stringify(session.messages),
+    session.createdAt,
+    session.updatedAt,
+  );
 }
 
 export function createSession(sessionId: string, userId: string): Session {
@@ -121,7 +64,7 @@ export function createSession(sessionId: string, userId: string): Session {
     summary: "",
     messages: [],
     createdAt: Date.now(),
-    updatedAt: Date.now()
+    updatedAt: Date.now(),
   };
 }
 
@@ -136,7 +79,6 @@ export function appendToSession(session: Session, ...msgs: SessionMessage[]): vo
 export async function compactIfNeeded(session: Session, apiKey: string): Promise<void> {
   if (session.messages.length <= MAX_MESSAGES) return;
 
-  // Take the older half and summarize it
   const cutoff = Math.floor(session.messages.length / 2);
   const oldMessages = session.messages.slice(0, cutoff);
 
@@ -156,48 +98,34 @@ export async function compactIfNeeded(session: Session, apiKey: string): Promise
     session.summary = result.text ?? session.summary;
     session.messages = session.messages.slice(cutoff);
   } catch {
-    // If summarization fails, just trim the oldest messages
     session.messages = session.messages.slice(cutoff);
   }
 }
 
 export function listSessions(userId?: string): string[] {
-  ensureDir();
-  const files = readdirSync(SESSIONS_DIR).filter(f => f.endsWith(".json"));
-  if (!userId) return files.map(f => f.replace(".json", ""));
-  return files
-    .filter(f => {
-      try {
-        const s: Session = JSON.parse(readFileSync(path.join(SESSIONS_DIR, f), "utf8"));
-        return s.userId === userId;
-      } catch { return false; }
-    })
-    .map(f => f.replace(".json", ""));
+  const db = getDb();
+  if (!userId) {
+    const rows = db.prepare("SELECT id FROM sessions ORDER BY updated_at DESC").all() as any[];
+    return rows.map(r => r.id);
+  }
+  const rows = db.prepare("SELECT id FROM sessions WHERE user_id = ? ORDER BY updated_at DESC").all(userId) as any[];
+  return rows.map(r => r.id);
 }
 
 export function cleanExpiredSessions(): void {
-  ensureDir();
-  const now = Date.now();
-  const files = readdirSync(SESSIONS_DIR).filter(f => f.endsWith(".json"));
+  const db = getDb();
+  const cutoff = Date.now() - SESSION_TTL_MS;
 
   // Remove expired
-  for (const f of files) {
-    const fp = path.join(SESSIONS_DIR, f);
-    try {
-      const stat = statSync(fp);
-      if (now - stat.mtimeMs > SESSION_TTL_MS) unlinkSync(fp);
-    } catch {}
-  }
+  db.prepare("DELETE FROM sessions WHERE updated_at < ?").run(cutoff);
 
   // Evict oldest if over max
-  const remaining = readdirSync(SESSIONS_DIR)
-    .filter(f => f.endsWith(".json"))
-    .map(f => ({ name: f, mtime: statSync(path.join(SESSIONS_DIR, f)).mtimeMs }))
-    .sort((a, b) => b.mtime - a.mtime);
-
-  if (remaining.length > MAX_SESSIONS) {
-    for (const f of remaining.slice(MAX_SESSIONS)) {
-      try { unlinkSync(path.join(SESSIONS_DIR, f.name)); } catch {}
-    }
+  const count = (db.prepare("SELECT COUNT(*) as cnt FROM sessions").get() as any).cnt;
+  if (count > MAX_SESSIONS) {
+    db.prepare(`
+      DELETE FROM sessions WHERE id IN (
+        SELECT id FROM sessions ORDER BY updated_at ASC LIMIT ?
+      )
+    `).run(count - MAX_SESSIONS);
   }
 }

@@ -1,13 +1,6 @@
-import { appendFileSync, readFileSync, writeFileSync, mkdirSync, existsSync, statSync, renameSync, unlinkSync } from "fs";
 import { randomUUID, createHash } from "crypto";
-import path from "path";
+import { getDb } from "../db.js";
 import { BLOCKED_PATTERNS } from "./safetySpine.js";
-
-const LOG_DIR = path.join(process.cwd(), "logs");
-const AUDIT_FILE = path.join(LOG_DIR, "audit.jsonl");
-const BUFFER_SIZE = 500;
-const MAX_LOG_BYTES = 10 * 1024 * 1024; // 10 MB
-const MAX_ROTATED_FILES = 5;
 
 const SENSITIVE_KEY = /(key|token|secret|password|passphrase|credential)/i;
 
@@ -25,9 +18,7 @@ export interface AuditEvent {
   durationMs?: number;
   success?: boolean;
   error?: string;
-  /** SHA-256 hash of the previous event — forms a tamper-evident chain */
   prevHash?: string;
-  /** SHA-256 hash of this event (computed over all fields except hash itself) */
   hash?: string;
 }
 
@@ -64,92 +55,44 @@ function sanitizeArgs(args: Record<string, unknown>): Record<string, unknown> {
   return clean;
 }
 
-/** Compute SHA-256 hash of an event (excluding the hash field itself) */
 function hashEvent(event: AuditEvent): string {
   const { hash: _h, ...rest } = event;
   return createHash("sha256").update(JSON.stringify(rest)).digest("hex");
 }
 
 class AuditLogger {
-  private buffer: AuditEvent[] = [];
-  private patternHits = new Map<number, number>();
   private lastHash: string = "GENESIS";
 
   constructor() {
-    this.loadExisting();
+    this.loadLastHash();
   }
 
-  private loadExisting(): void {
-    if (!existsSync(AUDIT_FILE)) return;
+  private loadLastHash(): void {
     try {
-      const lines = readFileSync(AUDIT_FILE, "utf8").trim().split("\n").filter(Boolean);
-      const tail = lines.slice(-BUFFER_SIZE);
-      for (const line of tail) {
-        try {
-          const evt: AuditEvent = JSON.parse(line);
-          this.buffer.push(evt);
-          if (evt.hash) this.lastHash = evt.hash;
-          if (evt.type === "block" && evt.patternIndex != null) {
-            this.patternHits.set(evt.patternIndex, (this.patternHits.get(evt.patternIndex) ?? 0) + 1);
-          }
-        } catch {}
-      }
-      // Count pattern hits from lines we didn't buffer
-      if (lines.length > BUFFER_SIZE) {
-        for (const line of lines.slice(0, -BUFFER_SIZE)) {
-          try {
-            const evt: AuditEvent = JSON.parse(line);
-            if (evt.hash) this.lastHash = evt.hash;
-            if (evt.type === "block" && evt.patternIndex != null) {
-              this.patternHits.set(evt.patternIndex, (this.patternHits.get(evt.patternIndex) ?? 0) + 1);
-            }
-          } catch {}
-        }
-      }
+      const db = getDb();
+      const row = db.prepare("SELECT hash FROM audit_events ORDER BY ts DESC, rowid DESC LIMIT 1").get() as any;
+      if (row?.hash) this.lastHash = row.hash;
     } catch {}
   }
 
-  private append(event: AuditEvent): void {
-    // Hash-chain: link this event to the previous one
+  private insert(event: AuditEvent): void {
     event.prevHash = this.lastHash;
     event.hash = hashEvent(event);
     this.lastHash = event.hash;
 
-    this.buffer.push(event);
-    if (this.buffer.length > BUFFER_SIZE) {
-      this.buffer = this.buffer.slice(-BUFFER_SIZE);
-    }
-    mkdirSync(LOG_DIR, { recursive: true });
-    this.rotateIfNeeded();
-    appendFileSync(AUDIT_FILE, JSON.stringify(event) + "\n");
-  }
-
-  /** Rotate audit.jsonl when it exceeds MAX_LOG_BYTES. Keeps up to MAX_ROTATED_FILES old logs. */
-  private rotateIfNeeded(): void {
-    if (!existsSync(AUDIT_FILE)) return;
-    try {
-      const size = statSync(AUDIT_FILE).size;
-      if (size < MAX_LOG_BYTES) return;
-
-      // Shift existing rotated files: audit.4.jsonl -> audit.5.jsonl, etc.
-      for (let i = MAX_ROTATED_FILES; i >= 1; i--) {
-        const older = path.join(LOG_DIR, `audit.${i}.jsonl`);
-        if (i === MAX_ROTATED_FILES) {
-          // Delete the oldest
-          if (existsSync(older)) unlinkSync(older);
-        } else {
-          const newer = path.join(LOG_DIR, `audit.${i + 1}.jsonl`);
-          if (existsSync(older)) renameSync(older, newer);
-        }
-      }
-
-      // Move current to audit.1.jsonl
-      renameSync(AUDIT_FILE, path.join(LOG_DIR, "audit.1.jsonl"));
-
-      // Start fresh -- new chain begins from GENESIS after rotation
-      // (chain verification works per-file)
-      this.lastHash = "GENESIS";
-    } catch {}
+    const db = getDb();
+    db.prepare(`
+      INSERT INTO audit_events
+        (id, ts, type, channel, session_id, blocked_command, pattern_label, pattern_index,
+         tool_name, tool_args, duration_ms, success, error, prev_hash, hash)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      event.id, event.ts, event.type, event.channel, event.sessionId,
+      event.blockedCommand ?? null, event.patternLabel ?? null, event.patternIndex ?? null,
+      event.toolName ?? null, event.toolArgs ? JSON.stringify(event.toolArgs) : null,
+      event.durationMs ?? null, event.success != null ? (event.success ? 1 : 0) : null,
+      event.error ?? null, event.prevHash ?? null, event.hash ?? null,
+    );
   }
 
   logBlock(label: string, command: string, channel: string, sessionId: string, patternIndex?: number): void {
@@ -163,10 +106,7 @@ class AuditLogger {
       patternLabel: label,
       patternIndex,
     };
-    if (patternIndex != null) {
-      this.patternHits.set(patternIndex, (this.patternHits.get(patternIndex) ?? 0) + 1);
-    }
-    this.append(event);
+    this.insert(event);
   }
 
   logToolExec(
@@ -186,44 +126,73 @@ class AuditLogger {
       success,
       error: error ? (error.length > 500 ? error.slice(0, 500) + "..." : error) : undefined,
     };
-    this.append(event);
+    this.insert(event);
   }
 
   getRecentEvents(limit = 50, offset = 0, type?: "block" | "tool_exec"): { events: AuditEvent[]; total: number } {
-    let filtered = type ? this.buffer.filter(e => e.type === type) : this.buffer;
-    const total = filtered.length;
-    // Return newest first
-    filtered = filtered.slice().reverse().slice(offset, offset + limit);
-    return { events: filtered, total };
+    const db = getDb();
+    let countSql = "SELECT COUNT(*) as cnt FROM audit_events";
+    let selectSql = "SELECT * FROM audit_events";
+    const params: any[] = [];
+
+    if (type) {
+      countSql += " WHERE type = ?";
+      selectSql += " WHERE type = ?";
+      params.push(type);
+    }
+
+    const total = (db.prepare(countSql).get(...params) as any).cnt;
+
+    selectSql += " ORDER BY ts DESC, rowid DESC LIMIT ? OFFSET ?";
+    const rows = db.prepare(selectSql).all(...params, limit, offset) as any[];
+
+    const events: AuditEvent[] = rows.map(r => ({
+      id: r.id,
+      ts: r.ts,
+      type: r.type,
+      channel: r.channel,
+      sessionId: r.session_id,
+      blockedCommand: r.blocked_command ?? undefined,
+      patternLabel: r.pattern_label ?? undefined,
+      patternIndex: r.pattern_index ?? undefined,
+      toolName: r.tool_name ?? undefined,
+      toolArgs: r.tool_args ? JSON.parse(r.tool_args) : undefined,
+      durationMs: r.duration_ms ?? undefined,
+      success: r.success != null ? !!r.success : undefined,
+      error: r.error ?? undefined,
+      prevHash: r.prev_hash ?? undefined,
+      hash: r.hash ?? undefined,
+    }));
+
+    return { events, total };
   }
 
   getStats(): AuditStats {
+    const db = getDb();
     const oneHourAgo = Date.now() - 3_600_000;
-    let totalBlocks = 0;
-    let totalToolExecs = 0;
-    let toolExecSuccesses = 0;
-    let lastBlockTs: number | null = null;
-    let blocksLastHour = 0;
-    const blocksByCategory: Record<string, number> = {};
-    const toolMap: Record<string, { total: number; failures: number; totalDuration: number }> = {};
 
-    for (const evt of this.buffer) {
-      if (evt.type === "block") {
-        totalBlocks++;
-        if (evt.patternLabel) {
-          blocksByCategory[evt.patternLabel] = (blocksByCategory[evt.patternLabel] ?? 0) + 1;
-        }
-        if (!lastBlockTs || evt.ts > lastBlockTs) lastBlockTs = evt.ts;
-        if (evt.ts > oneHourAgo) blocksLastHour++;
-      } else if (evt.type === "tool_exec") {
-        totalToolExecs++;
-        if (evt.success) toolExecSuccesses++;
-        const name = evt.toolName ?? "unknown";
-        if (!toolMap[name]) toolMap[name] = { total: 0, failures: 0, totalDuration: 0 };
-        toolMap[name].total++;
-        if (!evt.success) toolMap[name].failures++;
-        toolMap[name].totalDuration += evt.durationMs ?? 0;
-      }
+    // Block stats
+    const blockTotal = (db.prepare("SELECT COUNT(*) as cnt FROM audit_events WHERE type = 'block'").get() as any).cnt;
+    const blocksLastHour = (db.prepare("SELECT COUNT(*) as cnt FROM audit_events WHERE type = 'block' AND ts > ?").get(oneHourAgo) as any).cnt;
+    const lastBlock = db.prepare("SELECT ts FROM audit_events WHERE type = 'block' ORDER BY ts DESC LIMIT 1").get() as any;
+
+    // Blocks by category
+    const blockCats = db.prepare(
+      "SELECT pattern_label, COUNT(*) as cnt FROM audit_events WHERE type = 'block' AND pattern_label IS NOT NULL GROUP BY pattern_label"
+    ).all() as any[];
+    const blocksByCategory: Record<string, number> = {};
+    for (const r of blockCats) blocksByCategory[r.pattern_label] = r.cnt;
+
+    // Tool exec stats
+    const toolTotal = (db.prepare("SELECT COUNT(*) as cnt FROM audit_events WHERE type = 'tool_exec'").get() as any).cnt;
+    const toolSuccesses = (db.prepare("SELECT COUNT(*) as cnt FROM audit_events WHERE type = 'tool_exec' AND success = 1").get() as any).cnt;
+
+    const toolRows = db.prepare(
+      "SELECT tool_name, COUNT(*) as total, SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as failures, AVG(duration_ms) as avg_dur FROM audit_events WHERE type = 'tool_exec' AND tool_name IS NOT NULL GROUP BY tool_name"
+    ).all() as any[];
+    const toolExecsByName: Record<string, { total: number; failures: number; avgDurationMs: number }> = {};
+    for (const r of toolRows) {
+      toolExecsByName[r.tool_name] = { total: r.total, failures: r.failures, avgDurationMs: Math.round(r.avg_dur ?? 0) };
     }
 
     let threatLevel: ThreatLevel = "low";
@@ -231,77 +200,84 @@ class AuditLogger {
     else if (blocksLastHour >= 3) threatLevel = "high";
     else if (blocksLastHour >= 1) threatLevel = "medium";
 
-    const toolExecsByName: Record<string, { total: number; failures: number; avgDurationMs: number }> = {};
-    for (const [name, data] of Object.entries(toolMap)) {
-      toolExecsByName[name] = {
-        total: data.total,
-        failures: data.failures,
-        avgDurationMs: Math.round(data.totalDuration / data.total),
-      };
-    }
-
     return {
-      totalBlocks,
-      totalToolExecs,
-      toolExecSuccessRate: totalToolExecs > 0 ? toolExecSuccesses / totalToolExecs : 1,
+      totalBlocks: blockTotal,
+      totalToolExecs: toolTotal,
+      toolExecSuccessRate: toolTotal > 0 ? toolSuccesses / toolTotal : 1,
       blocksByCategory,
       toolExecsByName,
       threatLevel,
-      lastBlockTs,
+      lastBlockTs: lastBlock?.ts ?? null,
     };
   }
 
   getPatternHitCounts(): PatternInfo[] {
+    const db = getDb();
+    const rows = db.prepare(
+      "SELECT pattern_index, COUNT(*) as cnt FROM audit_events WHERE type = 'block' AND pattern_index IS NOT NULL GROUP BY pattern_index"
+    ).all() as any[];
+    const hitMap = new Map<number, number>();
+    for (const r of rows) hitMap.set(r.pattern_index, r.cnt);
+
     return BLOCKED_PATTERNS.map((p, i) => ({
       index: i,
       label: p.label,
       regex: p.regex.source,
-      hitCount: this.patternHits.get(i) ?? 0,
+      hitCount: hitMap.get(i) ?? 0,
     }));
   }
 
-  /** Verify the hash chain integrity. Returns broken links if tampered. */
   verifyChain(): { valid: boolean; totalChecked: number; brokenLinks: number[] } {
-    if (!existsSync(AUDIT_FILE)) return { valid: true, totalChecked: 0, brokenLinks: [] };
-    const lines = readFileSync(AUDIT_FILE, "utf8").trim().split("\n").filter(Boolean);
+    const db = getDb();
+    const rows = db.prepare("SELECT * FROM audit_events ORDER BY ts ASC, rowid ASC").all() as any[];
+
     let prevHash = "GENESIS";
     const brokenLinks: number[] = [];
 
-    for (let i = 0; i < lines.length; i++) {
-      try {
-        const evt: AuditEvent = JSON.parse(lines[i]);
-        // Skip legacy events without hash chain
-        if (!evt.hash) continue;
-        // Verify prevHash links to actual previous
-        if (evt.prevHash && evt.prevHash !== prevHash) {
-          brokenLinks.push(i);
-        }
-        // Verify event hash is correct
-        const computed = hashEvent(evt);
-        if (computed !== evt.hash) {
-          brokenLinks.push(i);
-        }
-        prevHash = evt.hash;
-      } catch {
-        brokenLinks.push(i);
-      }
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      if (!r.hash) continue;
+
+      const evt: AuditEvent = {
+        id: r.id, ts: r.ts, type: r.type, channel: r.channel, sessionId: r.session_id,
+        blockedCommand: r.blocked_command ?? undefined, patternLabel: r.pattern_label ?? undefined,
+        patternIndex: r.pattern_index ?? undefined, toolName: r.tool_name ?? undefined,
+        toolArgs: r.tool_args ? JSON.parse(r.tool_args) : undefined,
+        durationMs: r.duration_ms ?? undefined,
+        success: r.success != null ? !!r.success : undefined,
+        error: r.error ?? undefined, prevHash: r.prev_hash ?? undefined, hash: r.hash ?? undefined,
+      };
+
+      if (evt.prevHash && evt.prevHash !== prevHash) brokenLinks.push(i);
+      const computed = hashEvent(evt);
+      if (computed !== evt.hash) brokenLinks.push(i);
+      prevHash = evt.hash!;
     }
 
-    return { valid: brokenLinks.length === 0, totalChecked: lines.length, brokenLinks };
+    return { valid: brokenLinks.length === 0, totalChecked: rows.length, brokenLinks };
   }
 
   exportLog(): string {
-    if (!existsSync(AUDIT_FILE)) return "";
-    return readFileSync(AUDIT_FILE, "utf8");
+    const db = getDb();
+    const rows = db.prepare("SELECT * FROM audit_events ORDER BY ts ASC, rowid ASC").all() as any[];
+    return rows.map(r => {
+      const evt: AuditEvent = {
+        id: r.id, ts: r.ts, type: r.type, channel: r.channel, sessionId: r.session_id,
+        blockedCommand: r.blocked_command ?? undefined, patternLabel: r.pattern_label ?? undefined,
+        patternIndex: r.pattern_index ?? undefined, toolName: r.tool_name ?? undefined,
+        toolArgs: r.tool_args ? JSON.parse(r.tool_args) : undefined,
+        durationMs: r.duration_ms ?? undefined,
+        success: r.success != null ? !!r.success : undefined,
+        error: r.error ?? undefined, prevHash: r.prev_hash ?? undefined, hash: r.hash ?? undefined,
+      };
+      return JSON.stringify(evt);
+    }).join("\n") + "\n";
   }
 
   clearLog(): void {
-    this.buffer = [];
-    this.patternHits.clear();
+    const db = getDb();
+    db.prepare("DELETE FROM audit_events").run();
     this.lastHash = "GENESIS";
-    if (existsSync(AUDIT_FILE)) {
-      writeFileSync(AUDIT_FILE, "", "utf8");
-    }
   }
 }
 

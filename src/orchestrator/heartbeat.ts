@@ -1,4 +1,4 @@
-import { readFileSync, appendFileSync, existsSync, mkdirSync } from "fs";
+import { existsSync } from "fs";
 import path from "path";
 import { pathToFileURL } from "url";
 import { randomUUID } from "crypto";
@@ -6,10 +6,10 @@ import { Message, SkillMeta } from "../types.js";
 import { runAgentLoop } from "./agentLoop.js";
 import { callLLM } from "../llm/router.js";
 import { scanContext, formatSnapshot } from "./contextScanner.js";
+import { getDb } from "../db.js";
+import { listJobs } from "./heartbeatStore.js";
 
 /* ────────── Triage log ────────── */
-const TRIAGE_LOG_DIR = path.join(process.cwd(), "logs");
-const TRIAGE_LOG_FILE = path.join(TRIAGE_LOG_DIR, "heartbeat-triage.jsonl");
 
 interface TriageLogEntry {
   ts: number;
@@ -25,8 +25,15 @@ interface TriageLogEntry {
 
 function logTriage(entry: TriageLogEntry): void {
   try {
-    mkdirSync(TRIAGE_LOG_DIR, { recursive: true });
-    appendFileSync(TRIAGE_LOG_FILE, JSON.stringify(entry) + "\n");
+    const db = getDb();
+    db.prepare(`
+      INSERT INTO heartbeat_triage (ts, job, mode, acted, reason, prompt, duration_ms, result, error)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      entry.ts, entry.job, entry.mode, entry.acted ? 1 : 0,
+      entry.reason, entry.prompt ?? null, entry.durationMs,
+      entry.result ?? null, entry.error ?? null,
+    );
   } catch {}
 }
 
@@ -77,17 +84,9 @@ function parseCron(cron: string): ParsedSchedule {
   return { intervalMs: value * multipliers[unit] };
 }
 
+/** Load enabled heartbeat jobs from SQLite. */
 export function loadHeartbeatConfig(): HeartbeatJob[] {
-  const configPath = path.join(process.cwd(), "config", "heartbeat.json");
-  if (!existsSync(configPath)) return [];
-  try {
-    const raw = readFileSync(configPath, "utf8");
-    const jobs: HeartbeatJob[] = JSON.parse(raw);
-    return jobs.filter(j => j.enabled !== false);
-  } catch {
-    console.warn("Failed to parse heartbeat.json, skipping heartbeat jobs.");
-    return [];
-  }
+  return listJobs(true);
 }
 
 const TRIAGE_SYSTEM_PROMPT = `You are a proactive AI agent's heartbeat triage system. Your job is to look at a snapshot of recent activity and decide whether the agent should take action.
@@ -154,26 +153,45 @@ async function triageSmartJob(job: HeartbeatJob, apiKey: string): Promise<Triage
   }
 }
 
+export interface HeartbeatController {
+  /** Schedule a single job (starts its timer). */
+  addJob(job: HeartbeatJob): void;
+  /** Stop and remove a job's timer by name. */
+  removeJob(name: string): void;
+  /** Reload all jobs from SQLite — stops old timers, starts fresh. */
+  reloadAll(): void;
+  /** Manually trigger a job right now. Returns the agent result. */
+  triggerJob(name: string): Promise<any>;
+  /** Stop everything. */
+  shutdown(): void;
+}
+
 export function startHeartbeat(
   jobs: HeartbeatJob[],
   skills: SkillMeta[],
   getApiKey: () => string,
   onResult?: (job: HeartbeatJob, result: any) => void
-): (() => void) {
-  const timers: NodeJS.Timeout[] = [];
+): HeartbeatController {
+  const jobTimers = new Map<string, NodeJS.Timeout>();
+  const jobDefs = new Map<string, HeartbeatJob>();
 
-  for (const job of jobs) {
+  function scheduleJob(job: HeartbeatJob): void {
+    // Remove existing timer if present
+    const existing = jobTimers.get(job.name);
+    if (existing) clearInterval(existing);
+
     let schedule: ParsedSchedule;
     try {
       schedule = parseCron(job.cron);
     } catch (err: any) {
       console.error(`Heartbeat job "${job.name}": ${err.message}`);
-      continue;
+      return;
     }
 
     const mode = job.mode || "fixed";
     console.log(`Heartbeat: scheduling "${job.name}" (${mode}) every ${schedule.intervalMs / 1000}s`);
 
+    jobDefs.set(job.name, job);
     const timer = setInterval(async () => {
       try {
         if (mode === "smart") {
@@ -187,10 +205,13 @@ export function startHeartbeat(
     }, schedule.intervalMs);
 
     timer.unref();
-    timers.push(timer);
+    jobTimers.set(job.name, timer);
   }
 
-  // Fix #2: Wire cron_skill into heartbeat — check every 60s for due cron jobs
+  // Initial scheduling
+  for (const job of jobs) scheduleJob(job);
+
+  // Wire cron_skill into heartbeat — check every 60s for due cron jobs
   const cronTimer = setInterval(async () => {
     try {
       await loadCronChecker();
@@ -219,12 +240,56 @@ export function startHeartbeat(
     }
   }, 60_000);
   cronTimer.unref();
-  timers.push(cronTimer);
 
-  return () => {
-    for (const t of timers) clearInterval(t);
-    timers.length = 0;
+  const controller: HeartbeatController = {
+    addJob(job: HeartbeatJob) {
+      scheduleJob(job);
+    },
+
+    removeJob(name: string) {
+      const timer = jobTimers.get(name);
+      if (timer) {
+        clearInterval(timer);
+        jobTimers.delete(name);
+        jobDefs.delete(name);
+        console.log(`Heartbeat: removed "${name}"`);
+      }
+    },
+
+    reloadAll() {
+      // Stop all existing job timers
+      for (const [name, timer] of jobTimers) {
+        clearInterval(timer);
+      }
+      jobTimers.clear();
+      jobDefs.clear();
+
+      // Re-read from SQLite and schedule
+      const fresh = loadHeartbeatConfig();
+      for (const job of fresh) scheduleJob(job);
+      console.log(`Heartbeat: reloaded ${fresh.length} job(s) from database`);
+    },
+
+    async triggerJob(name: string) {
+      const job = jobDefs.get(name);
+      if (!job) throw new Error(`Job "${name}" not found in active scheduler`);
+
+      if ((job.mode || "fixed") === "smart") {
+        return executeSmartJob(job, skills, getApiKey, onResult);
+      } else {
+        return executeFixedJob(job, skills, getApiKey, onResult);
+      }
+    },
+
+    shutdown() {
+      for (const timer of jobTimers.values()) clearInterval(timer);
+      jobTimers.clear();
+      jobDefs.clear();
+      clearInterval(cronTimer);
+    },
   };
+
+  return controller;
 }
 
 async function executeFixedJob(
