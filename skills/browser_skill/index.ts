@@ -325,7 +325,7 @@ async function doAction(
       await p.goto(url, { waitUntil, timeout: Math.max(timeout, 15000) });
       const title = await p.title();
       const text = await p.innerText("body").catch(() => "");
-      const snippet = text.replace(/\s+/g, " ").trim().slice(0, 1000);
+      const snippet = text.replace(/\s+/g, " ").trim().slice(0, 3000);
       return ok("navigate", { url, title, text: snippet }, start);
     }
 
@@ -386,7 +386,7 @@ async function doAction(
       const text = selector
         ? await p.locator(selector).first().innerText({ timeout })
         : await p.innerText("body");
-      return ok("read_text", { text: text.replace(/\s+/g, " ").trim().slice(0, 3000) }, start);
+      return ok("read_text", { text: text.replace(/\s+/g, " ").trim().slice(0, 15000) }, start);
     }
 
     /* ── scroll ── */

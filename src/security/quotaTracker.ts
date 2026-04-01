@@ -36,7 +36,7 @@ const WINDOW_MS = 3_600_000; // 1 hour
 
 const config: QuotaConfig = {
   llmCallsPerHour: Number(process.env.USER_QUOTA_LLM) || 100,
-  expensiveSkillsPerHour: Number(process.env.USER_QUOTA_EXPENSIVE) || 20,
+  expensiveSkillsPerHour: Number(process.env.USER_QUOTA_EXPENSIVE) || 120,
 };
 
 function countRecent(userId: string, kind: string, now: number): number {
