@@ -93,7 +93,8 @@ export async function runAgentLoop(
   let toolResults: ToolResult[] = [];
   let iterations = 0;
 
-  while (iterations++ < 12) {
+  const maxIterations = Number(process.env.AGENT_MAX_ITERATIONS) || 150;
+  while (iterations++ < maxIterations) {
     // Per-user LLM quota check
     const quota = checkLLMQuota(msg.userId);
     if (!quota.allowed) {
@@ -127,10 +128,20 @@ export async function runAgentLoop(
 
     // Execute each tool call and append tool results as proper messages
     for (const tc of llmResponse.tool_calls) {
-      const parsed: ToolCall = {
-        name: tc.function.name,
-        args: JSON.parse(tc.function.arguments || "{}")
-      };
+      let parsed: ToolCall;
+      try {
+        parsed = {
+          name: tc.function.name,
+          args: JSON.parse(tc.function.arguments || "{}")
+        };
+      } catch (parseErr: any) {
+        // LLM produced malformed JSON arguments — feed error back so it can retry
+        const errMsg = `Invalid JSON in tool arguments for ${tc.function.name}: ${parseErr.message}. Please retry with properly escaped JSON.`;
+        toolResults.push({ name: tc.function.name, output: "", error: errMsg });
+        onStream?.({ type: "tool_result", name: tc.function.name, output: "", error: errMsg });
+        messages.push({ role: "tool", tool_call_id: tc.id, content: `Error: ${errMsg}` });
+        continue;
+      }
 
       onStream?.({ type: "tool_call", name: parsed.name, args: parsed.args });
 

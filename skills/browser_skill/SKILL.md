@@ -19,7 +19,8 @@ Call name: "browser_skill"
 - **select**: Select a dropdown option. Args: `{ action: "select", selector: "select#country", value: "US" }`
 
 ### Data Extraction
-- **read_text**: Extract text from page or element. Args: `{ action: "read_text", selector?: "css" }`. Returns up to 3000 chars.
+- **read_text**: Extract text from page or element. Args: `{ action: "read_text", selector?: "css" }`. Returns up to 15000 chars. Use a selector to target specific content and avoid page chrome.
+- **get_links**: Get all links from the page or a container. Args: `{ action: "get_links", selector?: "css" }`. Returns `{ links: [{ text, href }], total, returned }`. Max 200 links. Hrefs are resolved to absolute URLs.
 - **extract**: Schema-based extraction. Args: `{ action: "extract", fields: { price: ".price", title: "h1", rating: ".stars" } }`. Returns `{ data: { price: "...", title: "...", rating: "..." } }`.
 - **screenshot**: Capture page or element. Args: `{ action: "screenshot", selector?: "css", fullPage?: true }`. Saves to `/output/` and returns path.
 
@@ -44,6 +45,13 @@ Call name: "browser_skill"
 - SSRF protection: localhost, 127.0.0.1, private IP ranges (10.x, 172.16-31.x, 192.168.x), link-local, and cloud metadata endpoints are blocked.
 - evaluate is disabled by default — requires `unsafe: true` flag.
 - Sessions are isolated per user/channel with 5-minute idle TTL.
+
+## Multi-page Scraping Tips
+When scraping content from multiple pages (e.g. song lyrics, articles, product listings):
+1. Use **navigate** to go to each page directly by URL — don't use click to follow links (selectors are fragile and waste calls on timeouts).
+2. Use **get_links** on an index/listing page to discover the actual URLs, then navigate to each one.
+3. Use **read_text** with a CSS selector to extract the specific content you need — this avoids getting nav/header/footer noise.
+4. Prefer direct URL navigation over click-based workflows for reliability.
 
 ## Response Format
 All actions return structured JSON: `{ status: "ok"|"error", action, url?, title?, text?, path?, data?, elapsedMs, error? }`

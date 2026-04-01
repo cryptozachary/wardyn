@@ -9,7 +9,7 @@ import type { Message } from "../../src/types.js";
 
 const ALL_ACTIONS = [
   "navigate", "screenshot", "click", "type", "evaluate", "read_text",
-  "scroll", "back", "forward", "select", "hover", "wait",
+  "get_links", "scroll", "back", "forward", "select", "hover", "wait",
   "cookies", "open_tab", "switch_tab", "close_tab", "extract", "close",
 ] as const;
 
@@ -252,6 +252,9 @@ interface BrowserResult {
   path?: string;
   elapsedMs: number;
   data?: any;
+  links?: { text: string; href: string }[];
+  total?: number;
+  returned?: number;
   error?: string;
 }
 
@@ -387,6 +390,26 @@ async function doAction(
         ? await p.locator(selector).first().innerText({ timeout })
         : await p.innerText("body");
       return ok("read_text", { text: text.replace(/\s+/g, " ").trim().slice(0, 15000) }, start);
+    }
+
+    /* ── get_links ── */
+    case "get_links": {
+      const { selector } = args;
+      const scope = selector ? p.locator(selector).first() : p.locator("body");
+      const anchors = scope.locator("a[href]");
+      const count = await anchors.count();
+      const max = 200;
+      const links: { text: string; href: string }[] = [];
+      for (let i = 0; i < Math.min(count, max); i++) {
+        const a = anchors.nth(i);
+        const href = await a.getAttribute("href").catch(() => null);
+        if (!href) continue;
+        const text = (await a.innerText().catch(() => "")).replace(/\s+/g, " ").trim();
+        // Resolve relative URLs to absolute
+        const absolute = href.startsWith("http") ? href : new URL(href, p.url()).href;
+        links.push({ text: text.slice(0, 120), href: absolute });
+      }
+      return ok("get_links", { links, total: count, returned: links.length }, start);
     }
 
     /* ── scroll ── */
