@@ -73,3 +73,8 @@ Viral_hunter → X, Reddit, trending. Money_maker → IndieHackers, ProductHunt.
 ## Signal Bank
 Raw signals that don't produce a winning idea this cycle go to memory/signal_bank.json.
 Check signal_bank.json at the start of each cycle — a stale signal + new context can become a winner.
+
+## Decay Rules (Product Strategist)
+- Signals older than 30 days: remove from signal_bank.json (stale)
+- Ideas stuck at "new" for 14+ days with no operator action: auto-shelve with note
+- Run decay at the start of each strategist cycle (pre-reflect phase)
