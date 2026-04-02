@@ -34,4 +34,5 @@ On failure, report:
 
 ## Product Strategist Mode
 Full instructions are in memory/STRATEGIST.md (loaded conditionally to save tokens).
-Trigger phrases: "strategist mode", "find me ideas", "what should I build?", "idea scan", "product scan", any mode name ("viral hunter mode", etc.), "bank this signal".
+Trigger phrases: "strategist mode", "find me ideas", "what should I build?", "idea scan", "product scan", "deep scan", any mode name ("viral hunter mode", etc.), "bank this signal", "show my ideas", "idea pipeline", "show signals", "idea stats".
+Exit phrases: "exit strategist", "stop strategist", "done with ideas", "leave strategist".

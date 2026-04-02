@@ -12,9 +12,16 @@ import {
   getOrCreateSession, appendToSession, compactIfNeeded, saveSession
 } from "./sessionStore.js";
 
-const STRATEGIST_TRIGGERS = /strategist mode|run strategist|find me ideas|idea scan|product scan|viral hunter|money maker|creator tools|leverage builder|what should i build|any good ideas|bank this signal|add signal|deep scan|reject |consider |shelve |build |built /i;
+// Phrases that ENTER strategist mode (intentional, not accidental)
+const STRATEGIST_ENTRY = /\b(strategist mode|run strategist|find me ideas|idea scan|product scan|viral hunter mode|money maker mode|creator tools mode|leverage builder mode|what should i build|any good ideas|bank this signal|deep scan|show my ideas|idea pipeline|what'?s in the pipeline|show signals|signal bank|idea stats)\b/i;
 
-function loadContext(userText?: string) {
+// Phrases that EXIT strategist mode
+const STRATEGIST_EXIT = /\b(exit strategist|stop strategist|done with ideas|leave strategist)\b/i;
+
+// In-memory mode tracker — persists across turns within same session
+const activeStrategistSessions = new Map<string, boolean>();
+
+function loadContext(strategistActive: boolean) {
   const memDir = path.join(process.cwd(), "memory");
   const memPath = path.join(memDir, "MEMORY.md");
   const soulPath = path.join(memDir, "SOUL.md");
@@ -22,9 +29,9 @@ function loadContext(userText?: string) {
   const memory = existsSync(memPath) ? readFileSync(memPath, "utf8") : "";
   const soul = existsSync(soulPath) ? readFileSync(soulPath, "utf8") : "";
 
-  // Conditionally load strategist instructions only when triggered
+  // Load strategist instructions only when mode is active
   let strategist = "";
-  if (userText && STRATEGIST_TRIGGERS.test(userText)) {
+  if (strategistActive) {
     strategist = existsSync(stratPath) ? readFileSync(stratPath, "utf8") : "";
   }
 
@@ -62,14 +69,22 @@ export async function runAgentLoop(
     onStream = onStreamOrOpts.onStream;
   }
 
-  const ctx = loadContext(msg.text);
+  // Load or create session — unified across all channels (single-user agent)
+  const sid = sessionId ?? "default";
+
+  // Determine strategist mode: entry activates, exit deactivates, otherwise inherit
+  if (STRATEGIST_EXIT.test(msg.text)) {
+    activeStrategistSessions.delete(sid);
+  } else if (STRATEGIST_ENTRY.test(msg.text)) {
+    activeStrategistSessions.set(sid, true);
+  }
+  const strategistActive = activeStrategistSessions.has(sid);
+
+  const ctx = loadContext(strategistActive);
   const toolDefs = tools.map(t => ({ name: t.name, description: t.description, parameters: t.parameters }));
   const toolList = tools.map(t => `- ${t.name}: ${t.description}`).join("\n");
   const strategistBlock = ctx.strategist ? `\n\n${ctx.strategist}` : "";
   const systemPrompt = `${ctx.soul}\n\n${ctx.memory}\n\nAvailable tools:\n${toolList}${strategistBlock}`;
-
-  // Load or create session — unified across all channels (single-user agent)
-  const sid = sessionId ?? "default";
   const session = getOrCreateSession(sid, msg.userId);
 
   // Compact history if it's getting long
