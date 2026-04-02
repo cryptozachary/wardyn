@@ -12,12 +12,23 @@ import {
   getOrCreateSession, appendToSession, compactIfNeeded, saveSession
 } from "./sessionStore.js";
 
-function loadContext() {
-  const memPath = path.join(process.cwd(), "memory", "MEMORY.md");
-  const soulPath = path.join(process.cwd(), "memory", "SOUL.md");
+const STRATEGIST_TRIGGERS = /strategist mode|run strategist|find me ideas|idea scan|product scan|viral hunter|money maker|creator tools|leverage builder|what should i build|any good ideas|bank this signal|add signal|deep scan|reject |consider |shelve |build |built /i;
+
+function loadContext(userText?: string) {
+  const memDir = path.join(process.cwd(), "memory");
+  const memPath = path.join(memDir, "MEMORY.md");
+  const soulPath = path.join(memDir, "SOUL.md");
+  const stratPath = path.join(memDir, "STRATEGIST.md");
   const memory = existsSync(memPath) ? readFileSync(memPath, "utf8") : "";
   const soul = existsSync(soulPath) ? readFileSync(soulPath, "utf8") : "";
-  return { memory, soul };
+
+  // Conditionally load strategist instructions only when triggered
+  let strategist = "";
+  if (userText && STRATEGIST_TRIGGERS.test(userText)) {
+    strategist = existsSync(stratPath) ? readFileSync(stratPath, "utf8") : "";
+  }
+
+  return { memory, soul, strategist };
 }
 
 function sanitizeId(id: string): string {
@@ -51,10 +62,11 @@ export async function runAgentLoop(
     onStream = onStreamOrOpts.onStream;
   }
 
-  const ctx = loadContext();
+  const ctx = loadContext(msg.text);
   const toolDefs = tools.map(t => ({ name: t.name, description: t.description, parameters: t.parameters }));
   const toolList = tools.map(t => `- ${t.name}: ${t.description}`).join("\n");
-  const systemPrompt = `${ctx.soul}\n\n${ctx.memory}\n\nAvailable tools:\n${toolList}`;
+  const strategistBlock = ctx.strategist ? `\n\n${ctx.strategist}` : "";
+  const systemPrompt = `${ctx.soul}\n\n${ctx.memory}\n\nAvailable tools:\n${toolList}${strategistBlock}`;
 
   // Load or create session — unified across all channels (single-user agent)
   const sid = sessionId ?? "default";

@@ -51,10 +51,10 @@ Avoid ideas requiring:
 - heavy infrastructure or large teams
 - deep domain expertise the operator lacks
 
-## Idea Log
-Past ideas, scores, and outcomes are tracked in memory/idea_log.json.
-Check before generating to avoid repeats or saturated concepts without a twist.
-Update status when an idea is built, rejected, or shelved.
+## Strategist Files
+- memory/STRATEGIST.md — full instructions (loaded conditionally when triggered, not every turn)
+- memory/idea_log.json — idea history with scores and status
+- memory/signal_bank.json — raw signals persisted across cycles
 
 ## Signal Sources (Product Strategist)
 When scanning for signals, use browser_skill to check these concrete sources:

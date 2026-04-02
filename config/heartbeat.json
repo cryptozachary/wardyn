@@ -54,5 +54,13 @@
     "enabled": false,
     "mode": "smart",
     "scanWindowMs": 86400000
+  },
+  {
+    "name": "strategist-review",
+    "cron": "every 168h",
+    "prompt": "Activate Product Strategist Mode — weekly review. Steps: 1) Read memory/idea_log.json using filesystem_skill. 2) Analyze the past 7 days: count ideas by status (new, considering, building, built, rejected, shelved). 3) Identify patterns: what modes/categories dominate? What is the operator consistently rejecting? What are they considering or building? 4) Read memory/signal_bank.json — are there stale signals worth revisiting given this week's patterns? 5) Write a one-paragraph recommendation for where to focus next week's strategist scans. 6) Save the full review to output/strategist_weekly_review.json using filesystem_skill. 7) Present a concise summary to the operator.",
+    "enabled": false,
+    "mode": "smart",
+    "scanWindowMs": 604800000
   }
 ]
