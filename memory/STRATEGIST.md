@@ -58,8 +58,6 @@ Favor ideas related to:
 - viral/simple consumer apps
 
 Avoid ideas requiring:
-- complex enterprise systems
-- long build cycles (>3 days)
 - heavy infrastructure or large teams
 - deep domain expertise the operator lacks
 
@@ -278,7 +276,7 @@ Once per week (triggered by the strategist-review heartbeat), analyze the idea_l
 - Are there stale signals in signal_bank.json worth revisiting?
 - One-paragraph recommendation: where to focus next week
 
-Output format: save to output/strategist_weekly_review.json and present summary to operator.
+Output format: save to output/strategist_weekly_review.json and present summary to operator. Also send the same summary to the operators email using the email skill.
 
 ## Safe JSON Handling (CRITICAL)
 idea_log.json and signal_bank.json are the strategist's persistent memory. Corruption = data loss.
