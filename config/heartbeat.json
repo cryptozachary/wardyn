@@ -50,17 +50,17 @@
   {
     "name": "product-strategist",
     "cron": "every 24h",
-    "prompt": "Activate Product Strategist Mode. Steps: 1) REFLECT FIRST: Read memory/idea_log.json and memory/signal_bank.json using filesystem_skill to know what was already generated, rejected, or banked. 2) SCAN: Pick 2-3 signal sources from MEMORY.md based on general mode. Use browser_skill navigate + read_text to scan each source for pain points, trending tools, viral apps, complaints, or emerging capabilities. 3) GENERATE: Turn raw signals into 5-10 candidate ideas. 4) VALIDATE: For each strong candidate, use browser_skill to search Google/ProductHunt for competitors. Note what exists and how this differs. 5) SCORE: Rate each idea using anchored scales (see SOUL.md) and compute total = pain*0.3 + virality*0.25 + build_speed*0.2 + monetization*0.15 + uniqueness*0.1. Do NOT cluster scores at 6-8. Use the full range. 6) FILTER: Keep only top 1-3 ideas scoring above 6.0 that pass all criteria. 7) OUTPUT: Write each idea to memory/idea_log.json in the required JSON format with status 'new' and today's date. Save unused signals to memory/signal_bank.json. Remove any used signals from the bank. 8) Save a human-readable summary to output/strategist_latest.json using filesystem_skill.",
+    "prompt": "Activate Product Strategist Mode. This is an autonomous heartbeat — execute the FULL cycle end-to-end without asking for confirmation. If a source is blocked, skip it and continue. Steps: 1) REFLECT FIRST: Read memory/idea_log.json and memory/signal_bank.json using filesystem_skill to know what was already generated, rejected, or banked. 2) SCAN: Pick 2-3 signal sources based on general mode. Use browser_skill navigate + read_text to scan each source for pain points, trending tools, viral apps, complaints, or emerging capabilities. If a source blocks you, skip it. 3) GENERATE: Turn raw signals into 5-10 candidate ideas. 4) VALIDATE: For each strong candidate, use browser_skill to search Google for competitors. Note what exists and how this differs. 5) SCORE: Rate each idea using anchored scales and compute total with mode-specific weights. Do NOT cluster scores at 6-8. Use the full range. 6) FILTER: Keep only top 1-3 ideas scoring above 6.0 that pass all criteria. 7) OUTPUT: Write each idea to memory/idea_log.json in the required JSON format with status 'new' and today's date. Save unused signals to memory/signal_bank.json. Remove any used signals from the bank. 8) Save a human-readable summary to output/strategist_latest.json using filesystem_skill. Do NOT stop to ask questions. Complete every step.",
     "enabled": false,
-    "mode": "smart",
+    "mode": "fixed",
     "scanWindowMs": 86400000
   },
   {
     "name": "strategist-review",
     "cron": "every 168h",
-    "prompt": "Activate Product Strategist Mode — weekly review. Steps: 1) Read memory/idea_log.json using filesystem_skill. 2) Analyze the past 7 days: count ideas by status (new, considering, building, built, rejected, shelved). 3) Identify patterns: what modes/categories dominate? What is the operator consistently rejecting? What are they considering or building? 4) Read memory/signal_bank.json — are there stale signals worth revisiting given this week's patterns? 5) Write a one-paragraph recommendation for where to focus next week's strategist scans. 6) Save the full review to output/strategist_weekly_review.json using filesystem_skill. 7) Present a concise summary to the operator.",
+    "prompt": "Activate Product Strategist Mode — weekly review. This is an autonomous heartbeat — execute fully without asking for confirmation. Steps: 1) Read memory/idea_log.json using filesystem_skill. 2) Analyze the past 7 days: count ideas by status (new, considering, building, built, rejected, shelved). 3) Identify patterns: what modes/categories dominate? What is the operator consistently rejecting? What are they considering or building? 4) Read memory/signal_bank.json — are there stale signals worth revisiting given this week's patterns? 5) Write a one-paragraph recommendation for where to focus next week's strategist scans. 6) Save the full review to output/strategist_weekly_review.json using filesystem_skill. 7) Present a concise summary. Do NOT stop to ask questions.",
     "enabled": false,
-    "mode": "smart",
+    "mode": "fixed",
     "scanWindowMs": 604800000
   }
 ]

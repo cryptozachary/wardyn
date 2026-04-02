@@ -53,7 +53,9 @@ export const parameters = {
 
 const SANDBOX_DIR = path.join(process.cwd(), "sandbox");
 const UPLOADS_DIR = path.join(process.cwd(), "uploads");
-const ALLOWED_DIRS = [SANDBOX_DIR, UPLOADS_DIR];
+const MEMORY_DIR  = path.join(process.cwd(), "memory");
+const OUTPUT_DIR  = path.join(process.cwd(), "output");
+const ALLOWED_DIRS = [SANDBOX_DIR, UPLOADS_DIR, MEMORY_DIR, OUTPUT_DIR];
 const MAX_READ_BYTES = 2 * 1024 * 1024;   // 2 MB
 const MAX_WRITE_BYTES = 5 * 1024 * 1024;  // 5 MB
 const MAX_READ_LINES = 5000;
@@ -84,16 +86,23 @@ async function safePath(filePath: string): Promise<string> {
   if (path.isAbsolute(filePath)) {
     resolved = path.resolve(filePath);
   } else {
-    // Try sandbox first, fall back to uploads for relative paths
-    resolved = path.resolve(SANDBOX_DIR, filePath);
-    try {
-      await fs.access(resolved, constants.F_OK);
-    } catch {
-      const uploadsResolved = path.resolve(UPLOADS_DIR, filePath);
-      try {
-        await fs.access(uploadsResolved, constants.F_OK);
-        resolved = uploadsResolved;
-      } catch { /* keep sandbox path */ }
+    // If the first segment matches an allowed directory name (e.g. "memory/foo.json"),
+    // resolve from project root so it lands in the correct allowed dir.
+    const firstSegment = filePath.split(/[/\\]/)[0];
+    const matchedDir = ALLOWED_DIRS.find(d => path.basename(d) === firstSegment);
+    if (matchedDir) {
+      resolved = path.resolve(process.cwd(), filePath);
+    } else {
+      // Otherwise, try each allowed dir and use the first where the file exists
+      resolved = path.resolve(SANDBOX_DIR, filePath); // default fallback
+      for (const dir of ALLOWED_DIRS) {
+        const candidate = path.resolve(dir, filePath);
+        try {
+          await fs.access(candidate, constants.F_OK);
+          resolved = candidate;
+          break;
+        } catch { /* try next */ }
+      }
     }
   }
 

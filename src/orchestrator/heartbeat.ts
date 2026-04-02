@@ -7,7 +7,7 @@ import { runAgentLoop } from "./agentLoop.js";
 import { callLLM } from "../llm/router.js";
 import { scanContext, formatSnapshot } from "./contextScanner.js";
 import { getDb } from "../db.js";
-import { listJobs } from "./heartbeatStore.js";
+import { listJobs, getJob } from "./heartbeatStore.js";
 
 /* ────────── Triage log ────────── */
 
@@ -271,8 +271,13 @@ export function startHeartbeat(
     },
 
     async triggerJob(name: string) {
-      const job = jobDefs.get(name);
-      if (!job) throw new Error(`Job "${name}" not found in active scheduler`);
+      // Check active scheduler first, then fall back to DB (for disabled jobs)
+      let job = jobDefs.get(name);
+      if (!job) {
+        const dbJob = getJob(name);
+        if (!dbJob) throw new Error(`Job "${name}" not found`);
+        job = dbJob;
+      }
 
       if ((job.mode || "fixed") === "smart") {
         return executeSmartJob(job, skills, getApiKey, onResult);
@@ -358,12 +363,14 @@ async function executeSmartJob(
     return;
   }
 
-  // Phase 2: Execute the triage-generated prompt
+  // Phase 2: Execute — prepend the original job prompt so the agent has full context,
+  // followed by the triage-generated action prompt.
+  const fullPrompt = `${job.prompt}\n\n---\nTriage decided to act. Reason: ${triage.reason}\nAction: ${triage.prompt}`;
   const msg: Message = {
     id: `hb-${randomUUID()}`,
     channel: "heartbeat",
     userId: "system",
-    text: triage.prompt,
+    text: fullPrompt,
     ts: Date.now()
   };
 

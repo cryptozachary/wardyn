@@ -30,10 +30,6 @@ function rowToJob(r: any): HeartbeatJob {
 export function seedFromJson(): number {
   if (!existsSync(CONFIG_PATH)) return 0;
 
-  const db = getDb();
-  const existing = (db.prepare("SELECT COUNT(*) as cnt FROM heartbeat_jobs").get() as any).cnt;
-  if (existing > 0) return 0; // already seeded
-
   let jobs: HeartbeatJob[];
   try {
     jobs = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
@@ -41,7 +37,10 @@ export function seedFromJson(): number {
     return 0;
   }
 
+  const db = getDb();
   const now = Date.now();
+
+  // INSERT OR IGNORE: seeds new jobs from JSON without overwriting existing ones
   const stmt = db.prepare(`
     INSERT OR IGNORE INTO heartbeat_jobs (name, cron, prompt, enabled, mode, scan_window_ms, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -49,14 +48,14 @@ export function seedFromJson(): number {
 
   let count = 0;
   for (const j of jobs) {
-    stmt.run(
+    const result = stmt.run(
       j.name, j.cron, j.prompt,
       j.enabled !== false ? 1 : 0,
       j.mode || "fixed",
       j.scanWindowMs ?? 7_200_000,
       now, now,
     );
-    count++;
+    if (result.changes > 0) count++;
   }
   return count;
 }

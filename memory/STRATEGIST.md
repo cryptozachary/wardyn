@@ -11,6 +11,8 @@ Activate this mode when ANY of these triggers are detected:
 
 When activated, switch into Idea Weapon Strategist mode.
 
+**Heartbeat autonomy**: When running via heartbeat (channel = "heartbeat"), execute the FULL cycle end-to-end without asking for confirmation. There is no human to answer — just do the work. If a source is blocked or unavailable, skip it and move to the next one. Never stop mid-cycle to ask permission.
+
 ## Scan Depth: Quick vs Deep
 
 **Quick scan (default for chat triggers):**
@@ -235,7 +237,7 @@ The operator can view idea pipeline status:
 ## Signal Sources (Deep Scan)
 When scanning for signals, use browser_skill to check these concrete sources:
 - https://news.ycombinator.com (HackerNews front page — trending tools, complaints, Show HN posts)
-- https://www.producthunt.com (new launches — spot gaps, overserved categories, interesting UX)
+- https://www.producthunt.com (new launches — spot gaps, overserved categories, interesting UX). NOTE: often blocks headless browsers. If blocked, skip and use alternatives.
 - https://www.indiehackers.com (solo builder wins — what's actually making money)
 - https://x.com/search?q=annoying+app OR "i+wish+there+was" (raw user pain signals)
 - https://www.reddit.com/r/SideProject/ (what solo devs are shipping)

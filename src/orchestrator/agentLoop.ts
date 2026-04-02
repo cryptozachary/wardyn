@@ -187,7 +187,11 @@ export async function runAgentLoop(
           error = `Quota exceeded: ${parsed.name} is rate-limited (${skillQuota.remaining} remaining this hour)`;
         } else {
           // Loop guard: detect repeated identical calls
-          const loopCheck = checkLoop(sid, parsed.name, parsed.args);
+          // Heartbeat jobs make many legitimate tool calls — use relaxed limits
+          const loopConfig = msg.channel === "heartbeat"
+            ? { maxDuplicates: 6, maxTotalCalls: 200, windowMs: 300_000, cooldownMs: 5_000 }
+            : {};
+          const loopCheck = checkLoop(sid, parsed.name, parsed.args, loopConfig);
           if (!loopCheck.allowed) {
             error = `Loop guard: ${loopCheck.reason}`;
           } else {
