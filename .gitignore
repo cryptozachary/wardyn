@@ -33,6 +33,12 @@ Thumbs.db
 .idea/
 .vscode/
 
+# Database (SQLite runtime data)
+data/
+
+# Agent output (generated images, screenshots, scraped files)
+output/
+
 # Sandbox scratch
 sandbox/*
 !sandbox/.gitkeep

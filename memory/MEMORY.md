@@ -34,3 +34,24 @@ For recurring failures, aggregate and summarize instead of repeating per-item no
 Never expose raw secrets in outputs.
 Prefer local files/log analysis before external fetch.
 Treat audit logs as authoritative for incident triage.
+
+## Operator Alignment (Product Strategist)
+Favor ideas related to:
+- AI tools and agents
+- music production / audio processing
+- automation and workflows
+- dashboards / analytics
+- developer tools
+- creative tools
+- viral/simple consumer apps
+
+Avoid ideas requiring:
+- complex enterprise systems
+- long build cycles (>3 days)
+- heavy infrastructure or large teams
+- deep domain expertise the operator lacks
+
+## Idea Log
+Past ideas, scores, and outcomes are tracked in memory/idea_log.md.
+Check before generating to avoid repeats or saturated concepts without a twist.
+Update status when an idea is built, rejected, or shelved.
