@@ -73,6 +73,13 @@
     .file-preview .remove-file { cursor: pointer; color: #ef4444; font-weight: bold; padding: 0 4px; }
     .file-preview .remove-file:hover { color: #f87171; }
 
+    /* Reconnect banner */
+    .reconnect-banner { display: none; align-items: center; justify-content: center; gap: 12px; padding: 10px 16px; background: #7f1d1d; border-bottom: 1px solid #991b1b; flex-shrink: 0; font-size: 13px; color: #fca5a5; }
+    .reconnect-banner.active { display: flex; }
+    .reconnect-banner button { padding: 4px 14px; border: 1px solid #f87171; border-radius: 4px; background: transparent; color: #f87171; font-size: 12px; font-weight: 600; cursor: pointer; }
+    .reconnect-banner button:hover { background: #991b1b; color: #fff; }
+    .reconnect-banner .reconnect-countdown { color: #f87171; font-weight: 600; }
+
     /* Drag overlay */
     .drag-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15,98,254,0.15); border: 3px dashed #0f62fe; z-index: 999; justify-content: center; align-items: center; pointer-events: none; }
     .drag-overlay.active { display: flex; }
@@ -104,6 +111,12 @@
     <input id="apiToken" type="password" placeholder="API Token (optional)" />
   </div>
 
+  <div class="reconnect-banner" id="reconnectBanner">
+    <span>Connection lost.</span>
+    <span>Reconnecting in <span class="reconnect-countdown" id="reconnectCountdown">3</span>s...</span>
+    <button id="reconnectNowBtn">Reconnect Now</button>
+  </div>
+
   <div class="messages" id="messages"></div>
 
   <div class="drag-overlay" id="dragOverlay"><span>Drop files to attach</span></div>
@@ -127,12 +140,21 @@
 let mode = 'ws';
 let ws = null;
 let sending = false;
-let currentSessionId = null; // unified "default" session — no longer persisted per-tab
-let httpSessionId = null;
+let currentSessionId = localStorage.getItem('nexus_ws_session') || null;
+let httpSessionId = localStorage.getItem('nexus_http_session') || null;
 let pendingFiles = []; // { file: File, uploaded?: { id, name, mimeType, path, size } }
+let historyRestored = false;
+
+// --- Reconnect state ---
+let reconnectAttempts = 0;
+let reconnectTimer = null;
+let countdownTimer = null;
+const RECONNECT_BASE_MS = 3000;
+const RECONNECT_MAX_MS = 30000;
 
 function persistSession() {
-  // Sessions are unified as "default" — no need to persist per-tab
+  if (currentSessionId) localStorage.setItem('nexus_ws_session', currentSessionId);
+  if (httpSessionId) localStorage.setItem('nexus_http_session', httpSessionId);
 }
 
 const msgContainer = document.getElementById('messages');
@@ -222,6 +244,74 @@ function setDisabled(disabled) {
   sendBtn.disabled = disabled;
 }
 
+// --- Reconnect banner ---
+const reconnectBanner = document.getElementById('reconnectBanner');
+const reconnectCountdown = document.getElementById('reconnectCountdown');
+const reconnectNowBtn = document.getElementById('reconnectNowBtn');
+
+function showReconnectBanner() {
+  reconnectBanner.classList.add('active');
+}
+
+function hideReconnectBanner() {
+  reconnectBanner.classList.remove('active');
+  clearTimeout(reconnectTimer);
+  clearInterval(countdownTimer);
+  reconnectTimer = null;
+  countdownTimer = null;
+}
+
+function scheduleReconnect() {
+  const delay = Math.min(RECONNECT_BASE_MS * Math.pow(2, reconnectAttempts), RECONNECT_MAX_MS);
+  let remaining = Math.ceil(delay / 1000);
+  reconnectCountdown.textContent = remaining;
+  showReconnectBanner();
+
+  countdownTimer = setInterval(() => {
+    remaining--;
+    reconnectCountdown.textContent = Math.max(remaining, 0);
+  }, 1000);
+
+  reconnectTimer = setTimeout(() => {
+    clearInterval(countdownTimer);
+    reconnectAttempts++;
+    connectWs();
+  }, delay);
+}
+
+reconnectNowBtn.addEventListener('click', () => {
+  clearTimeout(reconnectTimer);
+  clearInterval(countdownTimer);
+  reconnectAttempts = 0;
+  connectWs();
+});
+
+// --- Restore chat history from server ---
+async function restoreHistory(sessionId) {
+  if (!sessionId || historyRestored) return;
+  try {
+    const headers = {};
+    const token = getToken();
+    if (token) headers['x-api-token'] = token;
+    const res = await fetch('/api/sessions/' + encodeURIComponent(sessionId), { headers });
+    if (!res.ok) return;
+    const session = await res.json();
+    if (!session.messages || session.messages.length === 0) return;
+
+    // Show summary if present
+    if (session.summary) {
+      addMsg('(Previous conversation summary loaded)', 'system');
+    }
+
+    // Replay user and assistant messages
+    for (const m of session.messages) {
+      if (m.role === 'user') addMsg(m.content || '', 'user');
+      else if (m.role === 'assistant' && m.content) addMsg(m.content, 'assistant');
+    }
+    historyRestored = true;
+  } catch {}
+}
+
 // --- Auto-resize textarea ---
 input.addEventListener('input', () => {
   input.style.height = 'auto';
@@ -241,11 +331,24 @@ function connectWs() {
 
   ws = new WebSocket(url);
 
-  ws.onopen = () => setStatus('connected', 'connected');
+  ws.onopen = () => {
+    setStatus('connected', 'connected');
+    reconnectAttempts = 0;
+    hideReconnectBanner();
+  };
 
   ws.onclose = (e) => {
-    setStatus('error', e.code === 4001 ? 'unauthorized' : 'disconnected');
     ws = null;
+    if (e.code === 4001) {
+      setStatus('error', 'unauthorized');
+      // Don't auto-reconnect on auth failure
+      return;
+    }
+    setStatus('error', 'disconnected');
+    // Auto-reconnect with backoff (only if we're in WS mode)
+    if (mode === 'ws') {
+      scheduleReconnect();
+    }
   };
 
   ws.onerror = () => setStatus('error', 'connection error');
@@ -256,15 +359,19 @@ function connectWs() {
 
     switch (data.type) {
       case 'connected':
-        // Only adopt server's session ID if we don't already have one persisted
         if (!currentSessionId && data.sessionId) {
           currentSessionId = data.sessionId;
           persistSession();
-          updateSessionLabel();
+        }
+        updateSessionLabel();
+        // Restore history from server on first connect if we have a session
+        if (!historyRestored && currentSessionId) {
+          restoreHistory(currentSessionId);
         }
         break;
       case 'session':
         currentSessionId = data.sessionId;
+        historyRestored = false;
         persistSession();
         updateSessionLabel();
         clearMessages();
@@ -392,13 +499,14 @@ async function sendHttp(text, attachments) {
 
 // --- New Session ---
 newSessionBtn.addEventListener('click', () => {
+  historyRestored = false;
   if (mode === 'ws' && ws && ws.readyState === WebSocket.OPEN) {
     currentSessionId = null;
-    persistSession();
+    localStorage.removeItem('nexus_ws_session');
     ws.send(JSON.stringify({ type: 'new_session' }));
   } else {
     httpSessionId = null;
-    persistSession();
+    localStorage.removeItem('nexus_http_session');
     clearMessages();
     addMsg('New session started', 'system');
     updateSessionLabel();
@@ -414,6 +522,7 @@ function setMode(newMode) {
   if (mode === 'ws') {
     connectWs();
   } else {
+    hideReconnectBanner();
     if (ws) { ws.close(); ws = null; }
     setStatus('', 'HTTP mode');
   }
