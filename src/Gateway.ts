@@ -14,7 +14,7 @@ import { attachWebSocket } from "./channels/websocket.js";
 import { loadHeartbeatConfig, startHeartbeat, type HeartbeatController } from "./orchestrator/heartbeat.js";
 import { seedFromJson, listJobs, getJob, createJob, updateJob, deleteJob } from "./orchestrator/heartbeatStore.js";
 import { listSessions, loadSession, cleanExpiredSessions } from "./orchestrator/sessionStore.js";
-import { getProviderName, setProviderName } from "./llm/router.js";
+import { getProviderName, setProviderName, getModelConfig, setModel } from "./llm/router.js";
 import { buildSkill } from "./builder/builderAgent.js";
 import { deleteSkill, isProtected } from "./builder/skillWriter.js";
 import { auditLogger } from "./security/auditLog.js";
@@ -31,7 +31,10 @@ import { upload, fileToAttachment, cleanExpiredUploads, UPLOADS_DIR } from "./up
 import { createServer } from "http";
 import { getDb, closeDb } from "./db.js";
 import dotenv from "dotenv";
+import os from "os";
 dotenv.config();
+
+const BOOT_START = Date.now();
 
 // Initialize SQLite database (creates tables on first run)
 getDb();
@@ -170,6 +173,24 @@ app.post("/api/setup/provider", requireAuth, (req, res) => {
     setProviderName(provider);
     keyCache.invalidate(); // refresh key cache for new provider
     res.json({ ok: true, provider: getProviderName() });
+  } catch (err: any) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
+});
+
+// --- Model selection ---
+app.get("/api/setup/models", requireAuth, (_req, res) => {
+  res.json({ ok: true, models: getModelConfig() });
+});
+
+app.post("/api/setup/models", requireAuth, (req, res) => {
+  const { provider, model } = req.body || {};
+  if (!provider || !model) {
+    return res.status(400).json({ ok: false, error: "provider and model are required" });
+  }
+  try {
+    setModel(provider, model);
+    res.json({ ok: true, provider, model });
   } catch (err: any) {
     res.status(400).json({ ok: false, error: err.message });
   }
@@ -741,13 +762,41 @@ app.get("/api/security/public-key", (_req, res) => {
   res.json({ ok: true, publicKey: pubKey });
 });
 
+function buildHealthPayload(authenticated: boolean) {
+  const basic = { ok: true, uptime: Math.floor((Date.now() - BOOT_START) / 1000) };
+  if (!authenticated) return basic;
+
+  const channelCfg = loadChannelConfig();
+  return {
+    ...basic,
+    provider: getProviderName(),
+    model: getModelConfig()[getProviderName()] ?? "default",
+    skills: skills.length,
+    channels: {
+      websocket: true,
+      discord: isDiscordBotRunning(),
+      telegram: !!channelCfg.telegram?.botToken,
+      slack: !!channelCfg.slack?.botToken,
+    },
+    heartbeat: {
+      jobs: listJobs().length,
+      enabled: listJobs(true).length,
+    },
+    memory: {
+      rss: Math.round(process.memoryUsage().rss / 1024 / 1024),
+      heap: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+    },
+  };
+}
+
 app.get('/health', (req, res) => {
-  // Redact diagnostics unless authenticated
   const token = req.get("x-api-token");
-  if (API_TOKEN && token !== API_TOKEN) {
-    return res.json({ ok: true });
-  }
-  res.json({ ok: true, provider: getProviderName(), discord: isDiscordBotRunning() });
+  const authed = !API_TOKEN || token === API_TOKEN;
+  res.json(buildHealthPayload(authed));
+});
+
+app.get('/api/health', requireAuth, (_req, res) => {
+  res.json(buildHealthPayload(true));
 });
 
 // Create HTTP server shared by Express and WebSocket
@@ -758,8 +807,6 @@ attachWebSocket(server, skills, () => getProviderKey(), API_TOKEN);
 
 // Seed heartbeat jobs from JSON config on first run, then start from SQLite
 const seeded = seedFromJson();
-if (seeded > 0) console.log(`Heartbeat: seeded ${seeded} job(s) from heartbeat.json`);
-
 const heartbeatJobs = loadHeartbeatConfig();
 let heartbeatCtrl: HeartbeatController | null = null;
 if (heartbeatJobs.length > 0) {
@@ -775,9 +822,6 @@ initSkillSecrets();
 
 // Migrate channel secrets from plaintext to encrypted vault
 const channelMigration = migrateChannelSecrets();
-if (channelMigration.migrated > 0) {
-  console.log(`[vault] Migrated ${channelMigration.migrated} channel secret(s) to encrypted vault`);
-}
 
 // Ensure Ed25519 signing keypair exists
 ensureKeypair();
@@ -787,12 +831,33 @@ setInterval(() => cleanExpiredSessions(), 3_600_000).unref();
 setInterval(() => cleanExpiredUploads(), 3_600_000).unref();
 
 server.listen(PORT, HOST, () => {
-  console.log(`Secure-Claw Gateway listening on http://${HOST}:${PORT}`);
-  console.log(`LLM provider: ${getProviderName()}`);
-  console.log(`WebSocket available at ws://${HOST}:${PORT}/ws`);
-  if (heartbeatJobs.length > 0) {
-    console.log(`Heartbeat: ${heartbeatJobs.length} job(s) scheduled`);
-  }
+  const bootMs = Date.now() - BOOT_START;
+  const channelCfg = loadChannelConfig();
+
+  const channels: string[] = ["websocket"];
+  if (isDiscordBotRunning()) channels.push("discord");
+  if (channelCfg.telegram?.botToken) channels.push("telegram");
+  if (channelCfg.slack?.botToken) channels.push("slack");
+
+  const notes: string[] = [];
+  if (seeded > 0) notes.push(`seeded ${seeded} heartbeat job(s) from config`);
+  if (channelMigration.migrated > 0) notes.push(`migrated ${channelMigration.migrated} channel secret(s) to vault`);
+
+  console.log(`
+  ╔═══════════════════════════════════════════╗
+  ║          NEXUS  ·  Secure-Claw            ║
+  ╚═══════════════════════════════════════════╝
+
+  URL        http://${HOST}:${PORT}
+  WebSocket  ws://${HOST}:${PORT}/ws
+  Provider   ${getProviderName()}
+  Skills     ${skills.length} loaded
+  Channels   ${channels.join(", ")}
+  Heartbeat  ${heartbeatJobs.length} job(s) (${listJobs(true).length} enabled)
+  Boot       ${bootMs}ms
+${notes.length ? "\n  " + notes.map(n => "• " + n).join("\n  ") + "\n" : ""}
+  Ready.
+`);
 });
 
 // Graceful shutdown — stop heartbeat timers and close SQLite

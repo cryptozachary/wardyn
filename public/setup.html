@@ -81,6 +81,13 @@
       <button id="setProviderBtn" class="btn-secondary" style="margin-top:8px">Set as Active Provider</button>
       <p class="msg" id="providerMsg"></p>
 
+      <label>Model</label>
+      <select id="modelSelect">
+        <option value="">Loading...</option>
+      </select>
+      <button id="setModelBtn" class="btn-secondary" style="margin-top:8px">Save Model</button>
+      <p class="msg" id="modelMsg"></p>
+
       <div id="keyFields">
         <label>Vault Passphrase</label>
         <input id="passphrase" type="password" placeholder="encrypts the key at rest" />
@@ -184,6 +191,29 @@ const providerPlaceholders = {
   anthropic: 'sk-ant-...',
   ollama: ''
 };
+const providerModels = {
+  openai: [
+    { value: 'gpt-5.4', label: 'GPT-5.4' },
+    { value: 'gpt-5.4-pro', label: 'GPT-5.4 Pro' },
+    { value: 'gpt-5.4-mini', label: 'GPT-5.4 Mini' },
+    { value: 'gpt-5.4-nano', label: 'GPT-5.4 Nano' },
+    { value: 'gpt-5-mini', label: 'GPT-5 Mini' },
+    { value: 'gpt-5-nano', label: 'GPT-5 Nano' },
+    { value: 'gpt-5', label: 'GPT-5' },
+    { value: 'gpt-4.1', label: 'GPT-4.1' },
+    { value: 'gpt-4o', label: 'GPT-4o' },
+    { value: 'gpt-4o-mini', label: 'GPT-4o Mini' },
+    { value: 'o3-mini', label: 'o3-mini' },
+  ],
+  anthropic: [
+    { value: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4' },
+    { value: 'claude-opus-4-20250514', label: 'Claude Opus 4' },
+    { value: 'claude-haiku-4-20250414', label: 'Claude Haiku 4' },
+    { value: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet' },
+    { value: 'claude-3-5-haiku-20241022', label: 'Claude 3.5 Haiku' },
+  ],
+};
+let currentModels = {}; // loaded from server
 
 function authHeaders() {
   const t = document.getElementById('apiToken').value.trim();
@@ -208,6 +238,10 @@ const saveKeyBtn = document.getElementById('saveKey');
 const ollamaPanel = document.getElementById('ollamaPanel');
 const ollamaUrlInput = document.getElementById('ollamaUrl');
 const ollamaModelSelect = document.getElementById('ollamaModel');
+const modelSelect = document.getElementById('modelSelect');
+const modelRow = modelSelect.parentElement; // the label + select are siblings
+const setModelBtn = document.getElementById('setModelBtn');
+const modelMsg = document.getElementById('modelMsg');
 
 providerSelect.addEventListener('change', updateProviderUI);
 
@@ -219,7 +253,41 @@ function updateProviderUI() {
   saveKeyBtn.style.display = isOllama ? 'none' : 'block';
   keyLabel.textContent = providerLabels[p] || 'API Key';
   providerKeyInput.placeholder = providerPlaceholders[p] || '';
-  if (isOllama) loadOllamaConfig();
+
+  // Show/hide model dropdown (Ollama has its own model selector)
+  const showModelSelect = !isOllama;
+  modelSelect.style.display = showModelSelect ? '' : 'none';
+  setModelBtn.style.display = showModelSelect ? '' : 'none';
+  // Hide the label above modelSelect too
+  const modelLabel = modelSelect.previousElementSibling;
+  if (modelLabel && modelLabel.tagName === 'LABEL') modelLabel.style.display = showModelSelect ? '' : 'none';
+
+  if (isOllama) {
+    loadOllamaConfig();
+  } else {
+    populateModelDropdown(p);
+  }
+}
+
+function populateModelDropdown(provider) {
+  const models = providerModels[provider] || [];
+  const current = currentModels[provider] || '';
+  modelSelect.innerHTML = '';
+  for (const m of models) {
+    const opt = document.createElement('option');
+    opt.value = m.value;
+    opt.textContent = m.label;
+    if (m.value === current) opt.selected = true;
+    modelSelect.appendChild(opt);
+  }
+  // If the saved model isn't in the list, add it as a custom entry
+  if (current && !models.find(m => m.value === current)) {
+    const opt = document.createElement('option');
+    opt.value = current;
+    opt.textContent = current + ' (custom)';
+    opt.selected = true;
+    modelSelect.appendChild(opt);
+  }
 }
 
 // --- Set active provider ---
@@ -246,6 +314,44 @@ document.getElementById('setProviderBtn').onclick = async () => {
     msg.className = 'msg err';
   }
 };
+
+// --- Set model ---
+setModelBtn.onclick = async () => {
+  const provider = providerSelect.value;
+  const model = modelSelect.value;
+  try {
+    const r = await fetch('/api/setup/models', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ provider, model })
+    });
+    const j = await r.json();
+    if (j.ok) {
+      currentModels[provider] = model;
+      modelMsg.textContent = `Model set to: ${model}`;
+      modelMsg.className = 'msg ok';
+    } else {
+      modelMsg.textContent = 'Error: ' + j.error;
+      modelMsg.className = 'msg err';
+    }
+  } catch (e) {
+    modelMsg.textContent = 'Error: ' + e;
+    modelMsg.className = 'msg err';
+  }
+};
+
+async function loadModelConfig() {
+  try {
+    const r = await fetch('/api/setup/models', { headers: authHeaders() });
+    const j = await r.json();
+    if (j.ok && j.models) {
+      currentModels = j.models;
+      // Re-populate the dropdown for the currently selected provider
+      const p = providerSelect.value;
+      if (p !== 'ollama') populateModelDropdown(p);
+    }
+  } catch {}
+}
 
 async function loadOllamaConfig() {
   try {
@@ -333,7 +439,7 @@ async function fetchStatus() {
 
 async function fetchProvider() {
   try {
-    const r = await fetch('/health');
+    const r = await fetch('/api/health', { headers: authHeaders() });
     const j = await r.json();
     const badge = document.getElementById('activeProvider');
     const name = j.provider || 'unknown';
@@ -344,7 +450,21 @@ async function fetchProvider() {
       providerSelect.value = name;
       updateProviderUI();
     }
-  } catch {}
+  } catch {
+    // Fall back to unauthenticated health if /api/health fails
+    try {
+      const r = await fetch('/health');
+      const j = await r.json();
+      const badge = document.getElementById('activeProvider');
+      const name = j.provider || 'unknown';
+      badge.textContent = name;
+      badge.className = 'provider-badge' + (name === 'ollama' ? ' ollama' : name === 'anthropic' ? ' anthropic' : '');
+      if (providerLabels[name]) {
+        providerSelect.value = name;
+        updateProviderUI();
+      }
+    } catch {}
+  }
 }
 
 // --- Memory ---
@@ -423,7 +543,7 @@ document.getElementById('healthBtn').onclick = async () => {
   const out = document.getElementById('healthOut');
   out.textContent = 'Checking...';
   try {
-    const r = await fetch('/health');
+    const r = await fetch('/api/health', { headers: authHeaders() });
     const j = await r.json();
     out.textContent = JSON.stringify(j, null, 2);
   } catch (e) {
@@ -612,6 +732,7 @@ loadToken();
 updateProviderUI();
 fetchStatus();
 fetchProvider();
+loadModelConfig();
 loadMemory();
 loadChannelConfig();
 loadSecrets();

@@ -718,13 +718,27 @@ input.addEventListener('paste', (e) => {
 // --- Fetch provider ---
 async function fetchProvider() {
   try {
-    const r = await fetch('/health');
+    const headers = {};
+    const token = getToken();
+    if (token) headers['x-api-token'] = token;
+    const r = await fetch('/api/health', { headers });
     const j = await r.json();
     const tag = document.getElementById('providerTag');
     const name = j.provider || '';
-    tag.textContent = name;
+    const model = j.model || '';
+    tag.textContent = model ? `${name} · ${model}` : name;
     tag.className = 'provider-tag' + (name === 'ollama' ? ' ollama' : name === 'anthropic' ? ' anthropic' : '');
-  } catch {}
+  } catch {
+    // Fall back to unauthenticated health
+    try {
+      const r = await fetch('/health');
+      const j = await r.json();
+      const tag = document.getElementById('providerTag');
+      const name = j.provider || '';
+      tag.textContent = name;
+      tag.className = 'provider-tag' + (name === 'ollama' ? ' ollama' : name === 'anthropic' ? ' anthropic' : '');
+    } catch {}
+  }
 }
 
 // --- Init ---

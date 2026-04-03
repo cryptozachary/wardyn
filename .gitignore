@@ -19,6 +19,7 @@ config/channels.json
 config/provider.json
 config/signing_key.pem
 config/approvals.json
+config/models.json
 
 # Pending skills (awaiting approval)
 skills_pending/

@@ -13,6 +13,7 @@ const providers: Record<string, LLMProvider> = {
 
 const ENV_PROVIDER = process.env.LLM_PROVIDER || "openai";
 const PROVIDER_CONFIG_PATH = path.join(process.cwd(), "config", "provider.json");
+const MODELS_CONFIG_PATH = path.join(process.cwd(), "config", "models.json");
 
 // Fallback order: try primary, then each fallback in sequence
 const FALLBACK_ORDER: string[] = (process.env.LLM_FALLBACK_ORDER || "openai,anthropic,ollama")
@@ -36,6 +37,44 @@ export function setProviderName(name: string): void {
   const cfgDir = path.join(process.cwd(), "config");
   if (!existsSync(cfgDir)) mkdirSync(cfgDir, { recursive: true });
   writeFileSync(PROVIDER_CONFIG_PATH, JSON.stringify({ provider: name }, null, 2), "utf8");
+}
+
+const MODEL_DEFAULTS: Record<string, string> = {
+  openai: process.env.OPENAI_MODEL || "gpt-4o-mini",
+  anthropic: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514",
+};
+
+export function getModelConfig(): Record<string, string> {
+  const cfg: Record<string, string> = { ...MODEL_DEFAULTS };
+  if (existsSync(MODELS_CONFIG_PATH)) {
+    try {
+      const saved = JSON.parse(readFileSync(MODELS_CONFIG_PATH, "utf8"));
+      for (const [k, v] of Object.entries(saved)) {
+        if (typeof v === "string") cfg[k] = v;
+      }
+    } catch {}
+  }
+  // Ollama model is in its own config
+  if (existsSync(path.join(process.cwd(), "config", "ollama.json"))) {
+    try {
+      const ollCfg = JSON.parse(readFileSync(path.join(process.cwd(), "config", "ollama.json"), "utf8"));
+      if (ollCfg.model) cfg.ollama = ollCfg.model;
+    } catch {}
+  }
+  return cfg;
+}
+
+export function setModel(provider: string, model: string): void {
+  if (!model || typeof model !== "string") throw new Error("model is required");
+  const cfgDir = path.join(process.cwd(), "config");
+  if (!existsSync(cfgDir)) mkdirSync(cfgDir, { recursive: true });
+
+  let existing: Record<string, string> = {};
+  if (existsSync(MODELS_CONFIG_PATH)) {
+    try { existing = JSON.parse(readFileSync(MODELS_CONFIG_PATH, "utf8")); } catch {}
+  }
+  existing[provider] = model;
+  writeFileSync(MODELS_CONFIG_PATH, JSON.stringify(existing, null, 2), "utf8");
 }
 
 export function getProvider(name?: string): LLMProvider {

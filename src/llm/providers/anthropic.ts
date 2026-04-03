@@ -1,8 +1,20 @@
 import axios from "axios";
+import { readFileSync, existsSync } from "fs";
+import path from "path";
 import type { LLMProvider, CallPayload, LLMResponse } from "../types.js";
 
-const MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514";
+const MODELS_PATH = path.join(process.cwd(), "config", "models.json");
 const API_URL = "https://api.anthropic.com/v1/messages";
+
+function getModel(): string {
+  if (existsSync(MODELS_PATH)) {
+    try {
+      const cfg = JSON.parse(readFileSync(MODELS_PATH, "utf8"));
+      if (cfg.anthropic) return cfg.anthropic;
+    } catch {}
+  }
+  return process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514";
+}
 
 export const anthropicProvider: LLMProvider = {
   name: "anthropic",
@@ -21,7 +33,7 @@ export const anthropicProvider: LLMProvider = {
     })) : undefined;
 
     const res = await axios.post(API_URL, {
-      model: MODEL,
+      model: getModel(),
       max_tokens: 4096,
       system,
       messages,
