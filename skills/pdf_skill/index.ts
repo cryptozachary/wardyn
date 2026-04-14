@@ -80,61 +80,49 @@ async function safePath(filePath: string): Promise<string> {
 
 /**
  * Extract text from PDF using multiple strategies:
- * 1. Try pdftotext (poppler-utils) if available — best quality
- * 2. Fall back to basic binary text extraction
+ * 1. pdf-parse v2 (pure JS — works on all platforms)
+ * 2. Try pdftotext (poppler-utils) if available
+ * 3. Fall back to basic binary text extraction
  */
 async function extractText(filePath: string, pages?: string): Promise<string> {
-  // Strategy 1: pdftotext (best quality)
+  // Strategy 1: pdf-parse v2 (pure JS — no external tools required)
+  try {
+    const { PDFParse, VerbosityLevel } = await import("pdf-parse");
+    const buf = await fs.readFile(filePath);
+    const parseParams: any = {};
+    if (pages) {
+      const match = pages.match(/^(\d+)(?:\s*-\s*(\d+))?$/);
+      if (match) {
+        const first = parseInt(match[1], 10);
+        const last = match[2] ? parseInt(match[2], 10) : first;
+        parseParams.partial = Array.from({ length: last - first + 1 }, (_, i) => first + i);
+      } else if (/^\d+(,\s*\d+)*$/.test(pages)) {
+        parseParams.partial = pages.split(",").map((p: string) => parseInt(p.trim(), 10));
+      }
+    }
+    const parser = new PDFParse({ data: new Uint8Array(buf), verbosity: VerbosityLevel.ERRORS });
+    const result = await parser.getText(parseParams);
+    await parser.destroy();
+    if (result.text?.trim().length > 0) return result.text;
+  } catch {
+    // pdf-parse failed, fall back
+  }
+
+  // Strategy 2: pdftotext (poppler-utils) if installed
   try {
     const args = ["-layout"];
     if (pages) {
-      // pdftotext uses -f (first) and -l (last) for page ranges
       const match = pages.match(/^(\d+)(?:\s*-\s*(\d+))?$/);
       if (match) {
         args.push("-f", match[1]);
         if (match[2]) args.push("-l", match[2]);
       }
     }
-    args.push(filePath, "-"); // output to stdout
-
+    args.push(filePath, "-");
     const text = await runCmd("pdftotext", args);
     if (text.trim().length > 0) return text;
   } catch {
-    // pdftotext not available, fall back
-  }
-
-  // Strategy 2: python with PyPDF2/pypdf if available
-  try {
-    const script = `
-import sys
-try:
-    from pypdf import PdfReader
-except ImportError:
-    from PyPDF2 import PdfReader
-reader = PdfReader("${filePath.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}")
-pages_arg = "${pages || ""}"
-if pages_arg:
-    parts = pages_arg.replace(" ", "").split(",")
-    indices = []
-    for p in parts:
-        if "-" in p:
-            start, end = p.split("-")
-            indices.extend(range(int(start)-1, int(end)))
-        else:
-            indices.append(int(p)-1)
-else:
-    indices = range(len(reader.pages))
-for i in indices:
-    if 0 <= i < len(reader.pages):
-        text = reader.pages[i].extract_text()
-        if text:
-            print(text)
-            print("---PAGE BREAK---")
-`;
-    const text = await runCmd("python3", ["-c", script]);
-    if (text.trim().length > 0) return text.replace(/---PAGE BREAK---\n?/g, "\n\n");
-  } catch {
-    // python/pypdf not available
+    // pdftotext not available
   }
 
   // Strategy 3: Basic binary text extraction (last resort)
