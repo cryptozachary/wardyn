@@ -18,8 +18,7 @@ const STRATEGIST_ENTRY = /\b(strategist mode|run strategist|find me ideas|idea s
 // Phrases that EXIT strategist mode
 const STRATEGIST_EXIT = /\b(exit strategist|stop strategist|done with ideas|leave strategist)\b/i;
 
-// In-memory mode tracker — persists across turns within same session
-const activeStrategistSessions = new Map<string, boolean>();
+// Strategist mode is persisted on Session.strategistMode — survives restarts.
 
 function loadContext(strategistActive: boolean) {
   const memDir = path.join(process.cwd(), "memory");
@@ -71,21 +70,22 @@ export async function runAgentLoop(
 
   // Load or create session — unified across all channels (single-user agent)
   const sid = sessionId ?? "default";
+  const session = getOrCreateSession(sid, msg.userId);
 
   // Determine strategist mode: entry activates, exit deactivates, otherwise inherit
+  // Persisted on the session record so mode survives server restarts.
   if (STRATEGIST_EXIT.test(msg.text)) {
-    activeStrategistSessions.delete(sid);
+    session.strategistMode = false;
   } else if (STRATEGIST_ENTRY.test(msg.text)) {
-    activeStrategistSessions.set(sid, true);
+    session.strategistMode = true;
   }
-  const strategistActive = activeStrategistSessions.has(sid);
+  const strategistActive = session.strategistMode;
 
   const ctx = loadContext(strategistActive);
   const toolDefs = tools.map(t => ({ name: t.name, description: t.description, parameters: t.parameters }));
   const toolList = tools.map(t => `- ${t.name}: ${t.description}`).join("\n");
   const strategistBlock = ctx.strategist ? `\n\n${ctx.strategist}` : "";
   const systemPrompt = `${ctx.soul}\n\n${ctx.memory}\n\nAvailable tools:\n${toolList}${strategistBlock}`;
-  const session = getOrCreateSession(sid, msg.userId);
 
   // Compact history if it's getting long
   await compactIfNeeded(session, providerKey);
@@ -120,7 +120,12 @@ export async function runAgentLoop(
   let toolResults: ToolResult[] = [];
   let iterations = 0;
 
+  // Persist the user-turn-with-strategist-flag immediately so the session
+  // reflects the new mode even if the first LLM call blows up.
+  saveSession(session);
+
   const maxIterations = Number(process.env.AGENT_MAX_ITERATIONS) || 150;
+  try {
   while (iterations++ < maxIterations) {
     // Per-user LLM quota check
     const quota = checkLLMQuota(msg.userId);
@@ -224,6 +229,11 @@ export async function runAgentLoop(
         content: error ? `Error: ${error}` : output
       });
     }
+
+    // Checkpoint after each tool batch so a crash/network error mid-chain
+    // doesn't leave the session silently empty. User will at least see the
+    // last user turn preserved; assistant partial is appended in catch below.
+    saveSession(session);
   }
 
   const finalText = "Stopped: iteration limit reached.";
@@ -233,6 +243,18 @@ export async function runAgentLoop(
   saveSession(session);
 
   return { final: finalText, toolResults, sessionId: sid };
+  } catch (err: any) {
+    // Mid-chain failure (LLM provider error, network drop, rate limit, etc).
+    // Persist a visible partial-response marker so the session isn't orphaned.
+    const completedToolNames = toolResults.map(t => t.name).filter(Boolean);
+    const partialNote = completedToolNames.length > 0
+      ? `[Partial response — error after ${completedToolNames.length} tool call(s) (${completedToolNames.slice(-3).join(", ")}). Reason: ${err?.message ?? err}. You can retry.]`
+      : `[Error before any tool calls completed: ${err?.message ?? err}. You can retry.]`;
+    log(msg.id, { error: err?.message ?? String(err), toolResults });
+    appendToSession(session, { role: "assistant", content: partialNote, ts: Date.now() });
+    saveSession(session);
+    throw err;
+  }
 }
 
 /**

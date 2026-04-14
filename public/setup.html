@@ -64,6 +64,28 @@
       <span id="activeProvider" class="provider-badge">--</span>
     </div>
 
+    <section id="healthSection">
+      <h2>System Health <button id="refreshHealth" class="btn-secondary" style="width:auto;margin:0;padding:4px 10px;font-size:11px;float:right">refresh</button></h2>
+      <div id="healthGrid" style="display:grid; grid-template-columns:repeat(2,1fr); gap:8px; font-size:12px;">
+        <div style="color:#64748b;">loading…</div>
+      </div>
+      <div style="display:flex; gap:8px; margin-top:12px; align-items:center;">
+        <button id="runBackupBtn" class="btn-secondary" style="width:auto; margin:0; padding:8px 14px; font-size:12px;">Run Backup</button>
+        <label style="margin:0; font-size:12px; color:#94a3b8;"><input type="checkbox" id="backupIncludeLogs" style="width:auto; margin-right:6px;" />include logs</label>
+        <span class="msg" id="backupMsg" style="margin:0; flex:1;"></span>
+      </div>
+    </section>
+
+    <style>
+      .h-card { background:#1e293b; border:1px solid #1e2d4a; border-radius:6px; padding:10px; }
+      .h-label { color:#64748b; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; }
+      .h-value { color:#e2e8f0; font-weight:600; margin-top:3px; }
+      .h-value.ok { color:#4ade80; }
+      .h-value.warn { color:#f59e0b; }
+      .h-value.off { color:#64748b; }
+      .h-sub { color:#94a3b8; font-size:11px; margin-top:2px; }
+    </style>
+
     <section>
       <h2>Gateway Token</h2>
       <label>API Token (x-api-token header)</label>
@@ -727,6 +749,87 @@ async function deleteSecret(skill, key) {
   } catch {}
 }
 
+// --- System Health ---
+function fmtBytes(n) {
+  if (!n) return '0 B';
+  if (n < 1024) return n + ' B';
+  if (n < 1024*1024) return (n/1024).toFixed(1) + ' KB';
+  if (n < 1024*1024*1024) return (n/1024/1024).toFixed(1) + ' MB';
+  return (n/1024/1024/1024).toFixed(2) + ' GB';
+}
+function fmtAgo(ts) {
+  if (!ts) return 'never';
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 60) return s + 's ago';
+  if (s < 3600) return Math.floor(s/60) + 'm ago';
+  if (s < 86400) return Math.floor(s/3600) + 'h ago';
+  return Math.floor(s/86400) + 'd ago';
+}
+function fmtUptime(sec) {
+  if (sec < 60) return sec + 's';
+  if (sec < 3600) return Math.floor(sec/60) + 'm';
+  if (sec < 86400) return Math.floor(sec/3600) + 'h ' + Math.floor((sec%3600)/60) + 'm';
+  return Math.floor(sec/86400) + 'd ' + Math.floor((sec%86400)/3600) + 'h';
+}
+async function loadHealth() {
+  const grid = document.getElementById('healthGrid');
+  try {
+    const r = await fetch('/api/health', { headers: authHeaders() });
+    if (!r.ok) { grid.innerHTML = '<div class="h-card">Auth required — set API token above.</div>'; return; }
+    const h = await r.json();
+    const channels = h.channels || {};
+    const chOn = Object.entries(channels).filter(([,v]) => v).map(([k]) => k);
+    const provList = (h.providers?.configured || []).join(', ') || 'none';
+    const hb = h.heartbeat || {};
+    const last = hb.lastRun;
+    grid.innerHTML = `
+      <div class="h-card"><div class="h-label">Uptime</div><div class="h-value ok">${fmtUptime(h.uptime)}</div></div>
+      <div class="h-card"><div class="h-label">Active Provider</div><div class="h-value">${h.provider || '—'}<div class="h-sub">model: ${h.model || '—'}</div></div></div>
+      <div class="h-card"><div class="h-label">Providers with keys</div><div class="h-value ${provList==='none'?'off':'ok'}">${provList}</div></div>
+      <div class="h-card"><div class="h-label">Skills loaded</div><div class="h-value">${h.skills || 0}</div></div>
+      <div class="h-card"><div class="h-label">Channels live</div><div class="h-value ${chOn.length? 'ok':'off'}">${chOn.length? chOn.join(', ') : 'none'}</div></div>
+      <div class="h-card"><div class="h-label">Heartbeat jobs</div><div class="h-value">${hb.enabled||0} / ${hb.jobs||0} enabled<div class="h-sub">last: ${last ? last.job + ' • ' + fmtAgo(last.ts) + (last.success?'':' (err)') : 'never run'}</div></div></div>
+      <div class="h-card"><div class="h-label">Database</div><div class="h-value">${fmtBytes(h.storage?.dbSizeBytes||0)}<div class="h-sub">${h.storage?.sessions||0} sessions</div></div></div>
+      <div class="h-card"><div class="h-label">Uploads dir</div><div class="h-value">${fmtBytes(h.storage?.uploadsSizeBytes||0)}</div></div>
+      <div class="h-card"><div class="h-label">Process memory</div><div class="h-value">${h.memory?.rss||0} MB<div class="h-sub">heap: ${h.memory?.heap||0} MB</div></div></div>
+      <div class="h-card"><div class="h-label">Active quota</div><div class="h-value">${h.quota?.totalLlmCalls||0} LLM calls<div class="h-sub">${h.quota?.activeUsers||0} user(s) this hour</div></div></div>
+    `;
+  } catch (e) {
+    grid.innerHTML = '<div class="h-card">Error loading health: ' + e + '</div>';
+  }
+}
+document.getElementById('refreshHealth')?.addEventListener('click', loadHealth);
+
+document.getElementById('runBackupBtn')?.addEventListener('click', async () => {
+  const msg = document.getElementById('backupMsg');
+  const btn = document.getElementById('runBackupBtn');
+  const includeLogs = document.getElementById('backupIncludeLogs').checked;
+  msg.textContent = 'Running backup...';
+  msg.className = 'msg';
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/backup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ includeLogs })
+    });
+    const j = await r.json();
+    if (j.ok) {
+      msg.textContent = 'Saved: ' + (j.location || 'backups/');
+      msg.className = 'msg ok';
+      loadHealth();
+    } else {
+      msg.textContent = 'Error: ' + (j.error || 'backup failed');
+      msg.className = 'msg err';
+    }
+  } catch (e) {
+    msg.textContent = 'Error: ' + e;
+    msg.className = 'msg err';
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 // --- Init ---
 loadToken();
 updateProviderUI();
@@ -736,6 +839,7 @@ loadModelConfig();
 loadMemory();
 loadChannelConfig();
 loadSecrets();
+loadHealth();
 </script>
 </body>
 </html>

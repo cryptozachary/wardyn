@@ -13,7 +13,7 @@ import { loadChannelConfig, saveChannelConfig, getMaskedConfig, clearChannelConf
 import { attachWebSocket } from "./channels/websocket.js";
 import { loadHeartbeatConfig, startHeartbeat, type HeartbeatController } from "./orchestrator/heartbeat.js";
 import { seedFromJson, listJobs, getJob, createJob, updateJob, deleteJob } from "./orchestrator/heartbeatStore.js";
-import { listSessions, loadSession, cleanExpiredSessions } from "./orchestrator/sessionStore.js";
+import { listSessions, loadSession, cleanExpiredSessions, searchSessions } from "./orchestrator/sessionStore.js";
 import { getProviderName, setProviderName, getModelConfig, setModel } from "./llm/router.js";
 import { buildSkill } from "./builder/builderAgent.js";
 import { deleteSkill, isProtected } from "./builder/skillWriter.js";
@@ -588,6 +588,15 @@ app.get("/api/sessions", requireAuth, (req, res) => {
   res.json({ sessions: all.slice(offset, offset + limit), total: all.length });
 });
 
+app.get("/api/sessions/search", requireAuth, (req, res) => {
+  const q = (req.query.q as string) || "";
+  if (!q.trim()) return res.json({ ok: true, hits: [], total: 0 });
+  const limit = Math.min(Number(req.query.limit) || 50, 200);
+  const userId = req.query.userId as string | undefined;
+  const hits = searchSessions(q, limit, userId);
+  res.json({ ok: true, hits, total: hits.length, query: q });
+});
+
 app.get("/api/sessions/:id", requireAuth, (req, res) => {
   const session = loadSession(req.params.id);
   if (!session) return res.status(404).json({ ok: false, error: "session not found" });
@@ -640,6 +649,11 @@ app.get("/api/security/loop-guard", requireAuth, (req, res) => {
 
 app.get("/api/security/quotas", requireAuth, (_req, res) => {
   res.json({ ok: true, quotas: getAllQuotas() });
+});
+
+app.get("/api/security/tool-history", requireAuth, (req, res) => {
+  const hours = Math.min(Math.max(Number(req.query.hours) || 24, 1), 24 * 30);
+  res.json({ ok: true, ...auditLogger.getToolHistory(hours) });
 });
 
 app.get("/api/heartbeat/triage-log", requireAuth, (req, res) => {
@@ -755,6 +769,31 @@ app.post("/api/security/clear", requireAuth, (_req, res) => {
   res.json({ ok: true });
 });
 
+// --- Backup endpoint: triggers scripts/backup.ts, returns output location ---
+app.post("/api/backup", requireAuth, async (req, res) => {
+  const includeLogs = !!req.body?.includeLogs;
+  try {
+    const { spawn } = await import("child_process");
+    const args = ["tsx", "scripts/backup.ts"];
+    if (includeLogs) args.push("--include-logs");
+    const child = spawn("npx", args, { cwd: process.cwd(), shell: true });
+    let out = ""; let err = "";
+    child.stdout.on("data", d => { out += d.toString(); });
+    child.stderr.on("data", d => { err += d.toString(); });
+    child.on("close", (code) => {
+      if (code === 0) {
+        // Extract the "Location:" line from output
+        const locMatch = out.match(/Location:\s*(.+)/);
+        res.json({ ok: true, output: out, location: locMatch?.[1]?.trim() ?? null });
+      } else {
+        res.status(500).json({ ok: false, error: err || out, exitCode: code });
+      }
+    });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // Public key endpoint for skill manifest verification (no auth required for P2P)
 app.get("/api/security/public-key", (_req, res) => {
   const pubKey = getPublicKey();
@@ -762,16 +801,67 @@ app.get("/api/security/public-key", (_req, res) => {
   res.json({ ok: true, publicKey: pubKey });
 });
 
+function dirSizeBytes(dir: string): number {
+  if (!fs.existsSync(dir)) return 0;
+  let total = 0;
+  try {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      try {
+        if (e.isDirectory()) total += dirSizeBytes(full);
+        else if (e.isFile()) total += fs.statSync(full).size;
+      } catch {}
+    }
+  } catch {}
+  return total;
+}
+
+function lastHeartbeatRun(): { ts: number; job: string; success: boolean } | null {
+  try {
+    const db = getDb();
+    const row = db.prepare(
+      "SELECT ts, job, error FROM heartbeat_triage ORDER BY ts DESC LIMIT 1"
+    ).get() as any;
+    if (!row) return null;
+    return { ts: row.ts, job: row.job, success: !row.error };
+  } catch { return null; }
+}
+
+function loadedProviders(): string[] {
+  try {
+    const keys = getKeys();
+    return Object.keys(keys).filter(k => !!keys[k]);
+  } catch { return []; }
+}
+
 function buildHealthPayload(authenticated: boolean) {
   const basic = { ok: true, uptime: Math.floor((Date.now() - BOOT_START) / 1000) };
   if (!authenticated) return basic;
 
   const channelCfg = loadChannelConfig();
+  const dbPath = path.join(process.cwd(), "data", "secureclaw.db");
+  const dbSize = fs.existsSync(dbPath) ? fs.statSync(dbPath).size : 0;
+  const uploadsSize = dirSizeBytes(UPLOADS_DIR);
+  const sessionCount = (() => {
+    try { return (getDb().prepare("SELECT COUNT(*) as c FROM sessions").get() as any).c; } catch { return 0; }
+  })();
+  const quotaSummary = (() => {
+    try {
+      const all = getAllQuotas();
+      return { activeUsers: all.length, totalLlmCalls: all.reduce((s, q) => s + q.llmCalls, 0) };
+    } catch { return { activeUsers: 0, totalLlmCalls: 0 }; }
+  })();
+
   return {
     ...basic,
     provider: getProviderName(),
     model: getModelConfig()[getProviderName()] ?? "default",
     skills: skills.length,
+    providers: {
+      configured: loadedProviders(),
+      active: getProviderName(),
+    },
     channels: {
       websocket: true,
       discord: isDiscordBotRunning(),
@@ -781,7 +871,14 @@ function buildHealthPayload(authenticated: boolean) {
     heartbeat: {
       jobs: listJobs().length,
       enabled: listJobs(true).length,
+      lastRun: lastHeartbeatRun(),
     },
+    storage: {
+      dbSizeBytes: dbSize,
+      uploadsSizeBytes: uploadsSize,
+      sessions: sessionCount,
+    },
+    quota: quotaSummary,
     memory: {
       rss: Math.round(process.memoryUsage().rss / 1024 / 1024),
       heap: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),

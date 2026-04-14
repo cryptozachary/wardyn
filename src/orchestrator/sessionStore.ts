@@ -20,6 +20,7 @@ export interface Session {
   messages: SessionMessage[];
   createdAt: number;
   updatedAt: number;
+  strategistMode: boolean;
 }
 
 export function loadSession(sessionId: string): Session | null {
@@ -33,6 +34,7 @@ export function loadSession(sessionId: string): Session | null {
     messages: JSON.parse(row.messages),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    strategistMode: !!row.strategist_mode,
   };
 }
 
@@ -40,13 +42,14 @@ export function saveSession(session: Session): void {
   session.updatedAt = Date.now();
   const db = getDb();
   db.prepare(`
-    INSERT INTO sessions (id, user_id, summary, messages, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO sessions (id, user_id, summary, messages, created_at, updated_at, strategist_mode)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
-      user_id    = excluded.user_id,
-      summary    = excluded.summary,
-      messages   = excluded.messages,
-      updated_at = excluded.updated_at
+      user_id         = excluded.user_id,
+      summary         = excluded.summary,
+      messages        = excluded.messages,
+      updated_at      = excluded.updated_at,
+      strategist_mode = excluded.strategist_mode
   `).run(
     session.id,
     session.userId,
@@ -54,6 +57,7 @@ export function saveSession(session: Session): void {
     JSON.stringify(session.messages),
     session.createdAt,
     session.updatedAt,
+    session.strategistMode ? 1 : 0,
   );
 }
 
@@ -65,6 +69,7 @@ export function createSession(sessionId: string, userId: string): Session {
     messages: [],
     createdAt: Date.now(),
     updatedAt: Date.now(),
+    strategistMode: false,
   };
 }
 
@@ -100,6 +105,72 @@ export async function compactIfNeeded(session: Session, apiKey: string): Promise
   } catch {
     session.messages = session.messages.slice(cutoff);
   }
+}
+
+export interface SessionSearchHit {
+  id: string;
+  userId: string;
+  updatedAt: number;
+  matchIn: "summary" | "message";
+  snippet: string;
+}
+
+/**
+ * Search sessions by free-text query. Matches against summary and message content.
+ * Uses SQL LIKE — fine for the single-operator scale (low thousands of sessions).
+ */
+export function searchSessions(query: string, limit = 50, userId?: string): SessionSearchHit[] {
+  const q = query.trim();
+  if (!q) return [];
+  const db = getDb();
+  const like = `%${q.replace(/[\\%_]/g, c => "\\" + c)}%`;
+
+  const rows = userId
+    ? db.prepare(
+        "SELECT id, user_id, summary, messages, updated_at FROM sessions " +
+        "WHERE user_id = ? AND (summary LIKE ? ESCAPE '\\' OR messages LIKE ? ESCAPE '\\') " +
+        "ORDER BY updated_at DESC LIMIT ?"
+      ).all(userId, like, like, limit) as any[]
+    : db.prepare(
+        "SELECT id, user_id, summary, messages, updated_at FROM sessions " +
+        "WHERE summary LIKE ? ESCAPE '\\' OR messages LIKE ? ESCAPE '\\' " +
+        "ORDER BY updated_at DESC LIMIT ?"
+      ).all(like, like, limit) as any[];
+
+  const qLower = q.toLowerCase();
+  const hits: SessionSearchHit[] = [];
+  for (const r of rows) {
+    let matchIn: "summary" | "message" = "message";
+    let snippet = "";
+    if (r.summary && r.summary.toLowerCase().includes(qLower)) {
+      matchIn = "summary";
+      snippet = buildSnippet(r.summary, qLower);
+    } else {
+      try {
+        const msgs: SessionMessage[] = JSON.parse(r.messages);
+        const hit = msgs.find(m => typeof m.content === "string" && m.content.toLowerCase().includes(qLower));
+        if (hit && typeof hit.content === "string") snippet = buildSnippet(hit.content, qLower);
+      } catch {}
+    }
+    hits.push({
+      id: r.id,
+      userId: r.user_id,
+      updatedAt: r.updated_at,
+      matchIn,
+      snippet: snippet || "(match in serialized content)",
+    });
+  }
+  return hits;
+}
+
+function buildSnippet(text: string, qLower: string, radius = 60): string {
+  const idx = text.toLowerCase().indexOf(qLower);
+  if (idx < 0) return text.slice(0, radius * 2);
+  const start = Math.max(0, idx - radius);
+  const end = Math.min(text.length, idx + qLower.length + radius);
+  const prefix = start > 0 ? "…" : "";
+  const suffix = end < text.length ? "…" : "";
+  return prefix + text.slice(start, end).replace(/\s+/g, " ").trim() + suffix;
 }
 
 export function listSessions(userId?: string): string[] {

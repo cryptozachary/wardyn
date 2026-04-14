@@ -302,6 +302,40 @@
       </section>
     </div>
 
+    <!-- Skill Activity Dashboard -->
+    <section>
+      <div class="events-header">
+        <h2>Skill Activity</h2>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <select id="historyHours" style="background:#1e293b;color:#e2e8f0;border:1px solid #1e2d4a;border-radius:6px;padding:4px 8px;font-size:12px;">
+            <option value="1">Last 1h</option>
+            <option value="6">Last 6h</option>
+            <option value="24" selected>Last 24h</option>
+            <option value="168">Last 7d</option>
+          </select>
+        </div>
+      </div>
+      <div id="historySummary" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px;">
+        <div class="h-mini"><div class="h-mini-label">Total runs</div><div class="h-mini-val" id="histTotal">—</div></div>
+        <div class="h-mini"><div class="h-mini-label">Failures</div><div class="h-mini-val" id="histFailures">—</div></div>
+        <div class="h-mini"><div class="h-mini-label">Success rate</div><div class="h-mini-val" id="histSuccess">—</div></div>
+      </div>
+      <div id="historyChart" style="display:flex; align-items:flex-end; gap:2px; height:80px; margin-bottom:12px; background:#0b1429; border-radius:6px; padding:8px;"></div>
+      <table class="audit-table">
+        <thead><tr><th>Tool</th><th>Runs</th><th>Failures</th><th>Success %</th><th>Avg ms</th><th>Last run</th></tr></thead>
+        <tbody id="historyTable"><tr><td colspan="6" style="color:#64748b;text-align:center;">loading…</td></tr></tbody>
+      </table>
+    </section>
+
+    <style>
+      .h-mini { background:#1e293b; border:1px solid #1e2d4a; border-radius:6px; padding:10px; }
+      .h-mini-label { color:#64748b; font-size:11px; text-transform:uppercase; }
+      .h-mini-val { color:#e2e8f0; font-weight:600; font-size:16px; margin-top:3px; }
+      .hbar { flex:1; background:#1e3a5f; border-radius:2px 2px 0 0; min-height:2px; position:relative; }
+      .hbar.fail { background:#7f1d1d; }
+      .hbar:hover::after { content: attr(data-label); position:absolute; bottom:100%; left:50%; transform:translateX(-50%); background:#0b1429; color:#e2e8f0; font-size:11px; padding:3px 6px; border-radius:4px; white-space:nowrap; z-index:10; }
+    </style>
+
     <!-- Pattern List -->
     <section>
       <h2>SafetySpine Patterns</h2>
@@ -337,7 +371,7 @@ document.querySelectorAll('.filter-btn').forEach(btn => {
 // --- Auto-refresh ---
 function startRefresh() {
   stopRefresh();
-  refreshTimer = setInterval(() => { loadStats(); loadEvents(); loadLoopGuard(); }, 5000);
+  refreshTimer = setInterval(() => { loadStats(); loadEvents(); loadLoopGuard(); loadHistory(); }, 5000);
 }
 function stopRefresh() { if (refreshTimer) clearInterval(refreshTimer); }
 document.getElementById('autoRefresh').addEventListener('change', (e) => {
@@ -585,6 +619,59 @@ document.getElementById('verifyHeadersBtn').addEventListener('click', async () =
   }
 });
 
+// --- Skill Activity History ---
+function agoLabel(ts) {
+  if (!ts) return '—';
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 60) return s + 's ago';
+  if (s < 3600) return Math.floor(s/60) + 'm ago';
+  if (s < 86400) return Math.floor(s/3600) + 'h ago';
+  return Math.floor(s/86400) + 'd ago';
+}
+async function loadHistory() {
+  const hours = Number(document.getElementById('historyHours').value) || 24;
+  try {
+    const r = await fetch('/api/security/tool-history?hours=' + hours, { headers: authHeaders() });
+    const j = await r.json();
+    if (!j.ok) return;
+
+    // Summary
+    document.getElementById('histTotal').textContent = j.totals.total;
+    document.getElementById('histFailures').textContent = j.totals.failures;
+    document.getElementById('histSuccess').textContent = (j.totals.successRate * 100).toFixed(1) + '%';
+
+    // Per-tool table
+    const tbody = document.getElementById('historyTable');
+    if (j.perTool.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="6" style="color:#64748b;text-align:center;">No tool executions in this window</td></tr>';
+    } else {
+      tbody.innerHTML = j.perTool.map(t => `
+        <tr>
+          <td>${t.tool}</td>
+          <td>${t.total}</td>
+          <td style="${t.failures>0?'color:#fca5a5':''}">${t.failures}</td>
+          <td>${(t.successRate*100).toFixed(1)}%</td>
+          <td>${t.avgDurationMs}</td>
+          <td style="color:#94a3b8;">${agoLabel(t.lastTs)}</td>
+        </tr>
+      `).join('');
+    }
+
+    // Hourly chart
+    const chart = document.getElementById('historyChart');
+    const max = Math.max(1, ...j.hourly.map(b => b.total));
+    chart.innerHTML = j.hourly.map(b => {
+      const hPct = (b.total / max) * 100;
+      const failPct = b.total > 0 ? (b.failures / b.total) * 100 : 0;
+      const label = new Date(b.hourStart).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit' }) + ` — ${b.total} runs, ${b.failures} failures`;
+      return `<div class="hbar${b.failures>0 && b.failures===b.total?' fail':''}" style="height:${Math.max(2,hPct)}%" data-label="${label}">
+        ${b.failures>0 && b.failures<b.total ? `<div style="position:absolute;bottom:0;left:0;right:0;height:${failPct}%;background:#7f1d1d;border-radius:0 0 2px 2px;"></div>` : ''}
+      </div>`;
+    }).join('');
+  } catch {}
+}
+document.getElementById('historyHours')?.addEventListener('change', loadHistory);
+
 // --- Init ---
 loadStats();
 loadEvents();
@@ -592,6 +679,7 @@ loadPatterns();
 loadChainStatus();
 loadLoopGuard();
 loadPublicKey();
+loadHistory();
 startRefresh();
 </script>
 </body>

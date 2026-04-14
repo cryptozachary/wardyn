@@ -40,14 +40,15 @@ function migrate(db: Database.Database): void {
   db.exec(`
     -- ─────────── Sessions ───────────
     CREATE TABLE IF NOT EXISTS sessions (
-      id          TEXT PRIMARY KEY,
-      user_id     TEXT NOT NULL,
-      summary     TEXT NOT NULL DEFAULT '',
-      messages    TEXT NOT NULL DEFAULT '[]',   -- JSON array of SessionMessage
-      created_at  INTEGER NOT NULL,
-      updated_at  INTEGER NOT NULL,
+      id               TEXT PRIMARY KEY,
+      user_id          TEXT NOT NULL,
+      summary          TEXT NOT NULL DEFAULT '',
+      messages         TEXT NOT NULL DEFAULT '[]',   -- JSON array of SessionMessage
+      created_at       INTEGER NOT NULL,
+      updated_at       INTEGER NOT NULL,
+      strategist_mode  INTEGER NOT NULL DEFAULT 0,   -- 0/1 — persists across restarts
       -- Encrypted blob stored alongside for integrity (optional)
-      hmac        TEXT
+      hmac             TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_sessions_user    ON sessions(user_id);
     CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at);
@@ -147,6 +148,17 @@ function migrate(db: Database.Database): void {
       updated_at      INTEGER NOT NULL
     );
   `);
+
+  // Additive migrations for existing installations
+  addColumnIfMissing(db, "sessions", "strategist_mode", "INTEGER NOT NULL DEFAULT 0");
+}
+
+/** Idempotent ALTER TABLE — adds a column only if it doesn't already exist. */
+function addColumnIfMissing(db: Database.Database, table: string, column: string, decl: string): void {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (!cols.some(c => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${decl}`);
+  }
 }
 
 /** Graceful shutdown. */

@@ -274,6 +274,73 @@ class AuditLogger {
     }).join("\n") + "\n";
   }
 
+  /**
+   * Aggregate tool executions over the last `hours` window.
+   * Returns per-tool summary + hourly buckets for a simple activity chart.
+   */
+  getToolHistory(hours = 24): {
+    windowHours: number;
+    perTool: Array<{ tool: string; total: number; failures: number; successRate: number; avgDurationMs: number; lastTs: number }>;
+    hourly: Array<{ hourStart: number; total: number; failures: number }>;
+    totals: { total: number; failures: number; successRate: number };
+  } {
+    const db = getDb();
+    const since = Date.now() - hours * 3600_000;
+
+    const perToolRows = db.prepare(
+      `SELECT tool_name,
+              COUNT(*) as total,
+              SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as failures,
+              AVG(duration_ms) as avg_dur,
+              MAX(ts) as last_ts
+       FROM audit_events
+       WHERE type = 'tool_exec' AND tool_name IS NOT NULL AND ts >= ?
+       GROUP BY tool_name
+       ORDER BY total DESC`
+    ).all(since) as any[];
+
+    const perTool = perToolRows.map(r => ({
+      tool: r.tool_name,
+      total: r.total,
+      failures: r.failures,
+      successRate: r.total > 0 ? (r.total - r.failures) / r.total : 1,
+      avgDurationMs: Math.round(r.avg_dur ?? 0),
+      lastTs: r.last_ts,
+    }));
+
+    // Bucket by hour
+    const hourMs = 3600_000;
+    const bucketStart = Math.floor(since / hourMs) * hourMs;
+    const buckets = new Map<number, { total: number; failures: number }>();
+    for (let t = bucketStart; t <= Date.now(); t += hourMs) {
+      buckets.set(t, { total: 0, failures: 0 });
+    }
+    const hourlyRows = db.prepare(
+      `SELECT ts, success FROM audit_events WHERE type = 'tool_exec' AND ts >= ?`
+    ).all(since) as any[];
+    for (const r of hourlyRows) {
+      const h = Math.floor(r.ts / hourMs) * hourMs;
+      const b = buckets.get(h);
+      if (b) {
+        b.total++;
+        if (r.success === 0) b.failures++;
+      }
+    }
+    const hourly = Array.from(buckets.entries())
+      .sort(([a], [b]) => a - b)
+      .map(([hourStart, v]) => ({ hourStart, ...v }));
+
+    const total = perTool.reduce((s, t) => s + t.total, 0);
+    const failures = perTool.reduce((s, t) => s + t.failures, 0);
+
+    return {
+      windowHours: hours,
+      perTool,
+      hourly,
+      totals: { total, failures, successRate: total > 0 ? (total - failures) / total : 1 },
+    };
+  }
+
   clearLog(): void {
     const db = getDb();
     db.prepare("DELETE FROM audit_events").run();

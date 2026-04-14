@@ -56,3 +56,6 @@ memory/signal_bank.json
 
 # Coverage
 coverage/
+
+# Backups (contain encrypted vault and skill secrets)
+backups/
