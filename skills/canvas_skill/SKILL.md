@@ -1,0 +1,1 @@
+canvas_skill — push structured content (markdown, tables, charts, code, JSON, raw HTML) to the operator's live Canvas view at /ui/canvas.html. Also supports list and clear. Use this when the operator asks to "show", "display", "render" something, or when a long result is more legible as a table/chart than a chat reply. Actions: push | list | clear | get.

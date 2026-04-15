@@ -1,4 +1,4 @@
-export type Channel = "telegram" | "discord" | "websocket" | "heartbeat" | "slack";
+export type Channel = "telegram" | "discord" | "websocket" | "heartbeat" | "slack" | "whatsapp";
 export interface Attachment {
   id: string;
   name: string;

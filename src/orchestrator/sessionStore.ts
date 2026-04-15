@@ -13,6 +13,9 @@ export interface SessionMessage {
   ts: number;
 }
 
+export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+export const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
+
 export interface Session {
   id: string;
   userId: string;
@@ -21,6 +24,7 @@ export interface Session {
   createdAt: number;
   updatedAt: number;
   strategistMode: boolean;
+  thinkingLevel: ThinkingLevel;
 }
 
 export function loadSession(sessionId: string): Session | null {
@@ -35,6 +39,7 @@ export function loadSession(sessionId: string): Session | null {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     strategistMode: !!row.strategist_mode,
+    thinkingLevel: (row.thinking_level as ThinkingLevel) || "medium",
   };
 }
 
@@ -42,14 +47,15 @@ export function saveSession(session: Session): void {
   session.updatedAt = Date.now();
   const db = getDb();
   db.prepare(`
-    INSERT INTO sessions (id, user_id, summary, messages, created_at, updated_at, strategist_mode)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO sessions (id, user_id, summary, messages, created_at, updated_at, strategist_mode, thinking_level)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       user_id         = excluded.user_id,
       summary         = excluded.summary,
       messages        = excluded.messages,
       updated_at      = excluded.updated_at,
-      strategist_mode = excluded.strategist_mode
+      strategist_mode = excluded.strategist_mode,
+      thinking_level  = excluded.thinking_level
   `).run(
     session.id,
     session.userId,
@@ -58,6 +64,7 @@ export function saveSession(session: Session): void {
     session.createdAt,
     session.updatedAt,
     session.strategistMode ? 1 : 0,
+    session.thinkingLevel,
   );
 }
 
@@ -70,7 +77,16 @@ export function createSession(sessionId: string, userId: string): Session {
     createdAt: Date.now(),
     updatedAt: Date.now(),
     strategistMode: false,
+    thinkingLevel: (process.env.DEFAULT_THINKING_LEVEL as ThinkingLevel) || "medium",
   };
+}
+
+export function setThinkingLevel(sessionId: string, level: ThinkingLevel): Session | null {
+  const s = loadSession(sessionId);
+  if (!s) return null;
+  s.thinkingLevel = level;
+  saveSession(s);
+  return s;
 }
 
 export function getOrCreateSession(sessionId: string, userId: string): Session {

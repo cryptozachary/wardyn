@@ -149,8 +149,22 @@ function migrate(db: Database.Database): void {
     );
   `);
 
+  // Canvas items (agent-pushed UI surface)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS canvas_items (
+      id          TEXT PRIMARY KEY,
+      session_id  TEXT NOT NULL,
+      kind        TEXT NOT NULL CHECK(kind IN ('markdown','table','chart','html','code','json')),
+      title       TEXT,
+      data        TEXT NOT NULL,         -- JSON payload (shape depends on kind)
+      created_at  INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_canvas_session ON canvas_items(session_id, created_at);
+  `);
+
   // Additive migrations for existing installations
   addColumnIfMissing(db, "sessions", "strategist_mode", "INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "sessions", "thinking_level", "TEXT NOT NULL DEFAULT 'medium'");
 }
 
 /** Idempotent ALTER TABLE — adds a column only if it doesn't already exist. */

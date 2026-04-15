@@ -32,12 +32,21 @@ export const anthropicProvider: LLMProvider = {
       input_schema: t.parameters ?? { type: "object" as const, properties: {} }
     })) : undefined;
 
+    // Map thinking level → Anthropic extended-thinking budget (tokens).
+    // Off/minimal skip thinking; higher levels allocate more budget.
+    const thinkingMap: Record<string, number> = {
+      off: 0, minimal: 0, low: 1024, medium: 2048, high: 4096, xhigh: 8192,
+    };
+    const budget = thinkingMap[payload.thinkingLevel ?? "medium"] ?? 0;
+    const thinking = budget > 0 ? { type: "enabled", budget_tokens: budget } : undefined;
+
     const res = await axios.post(API_URL, {
       model: getModel(),
-      max_tokens: 4096,
+      max_tokens: 4096 + budget,
       system,
       messages,
-      tools
+      tools,
+      ...(thinking ? { thinking } : {}),
     }, {
       headers: {
         "x-api-key": apiKey,

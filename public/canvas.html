@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Canvas · Nexus</title>
+<style>
+  :root { color-scheme: dark; --bg:#0b0d10; --fg:#e6e9ef; --muted:#7d8696; --card:#14181e; --accent:#6ea8fe; --ok:#7ee787; --warn:#f2c35c; --fail:#ff7b72; --border:#1e242c; }
+  html,body{background:var(--bg);color:var(--fg);font:14px/1.45 -apple-system,Segoe UI,Helvetica,Arial,sans-serif;margin:0;padding:0;}
+  header{padding:14px 20px;border-bottom:1px solid var(--border);display:flex;gap:16px;align-items:center;position:sticky;top:0;background:var(--bg);z-index:5;}
+  h1{font-size:15px;margin:0;font-weight:600;letter-spacing:.3px}
+  .muted{color:var(--muted)}
+  select,input,button{background:var(--card);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font:inherit}
+  button{cursor:pointer}
+  button:hover{border-color:var(--accent)}
+  main{padding:18px 20px;max-width:1100px;margin:0 auto;display:flex;flex-direction:column;gap:16px}
+  .item{background:var(--card);border:1px solid var(--border);border-radius:10px;overflow:hidden}
+  .item header{padding:10px 14px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;position:static}
+  .item .title{font-weight:600}
+  .item .ts{color:var(--muted);font-size:12px}
+  .item .kind{display:inline-block;background:#1b2230;color:var(--accent);padding:2px 8px;border-radius:4px;font-size:11px;text-transform:uppercase;margin-right:6px}
+  .body{padding:14px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{border:1px solid var(--border);padding:6px 10px;text-align:left}
+  th{background:#12171e;color:var(--muted);font-weight:600}
+  pre{margin:0;overflow-x:auto;background:#0d1117;border:1px solid var(--border);padding:10px;border-radius:6px;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .md h1,.md h2,.md h3{margin:.4em 0}
+  .md p{margin:.4em 0}
+  .md code{background:#0d1117;padding:1px 4px;border-radius:3px;font:12px ui-monospace,Menlo,monospace}
+  .md pre code{background:transparent;padding:0}
+  .chart svg{width:100%;height:280px}
+  .empty{color:var(--muted);text-align:center;padding:40px 0}
+</style>
+</head>
+<body>
+<header>
+  <h1>Canvas</h1>
+  <span class="muted">· agent output surface</span>
+  <span style="flex:1"></span>
+  <label class="muted">session&nbsp;<input id="session" placeholder="(all)" style="width:200px" /></label>
+  <label class="muted">auto&nbsp;<input id="auto" type="checkbox" checked /></label>
+  <button id="refresh">refresh</button>
+  <button id="clear">clear</button>
+</header>
+<main id="list"><div class="empty">loading…</div></main>
+<script>
+  const apiToken = localStorage.getItem("apiToken") || "";
+  const H = () => apiToken ? { "x-api-token": apiToken } : {};
+  const qs = new URLSearchParams(location.search);
+  const sessionInput = document.getElementById("session");
+  sessionInput.value = qs.get("session") || "";
+  const fmtTs = t => new Date(t).toLocaleString();
+  const esc = s => String(s ?? "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+
+  // Minimal markdown: headings, bold/italic, code, links, lists.
+  function mdToHtml(md) {
+    md = esc(md);
+    md = md.replace(/```([\s\S]*?)```/g, (_,c) => `<pre><code>${c}</code></pre>`);
+    md = md.replace(/`([^`]+)`/g, (_,c) => `<code>${c}</code>`);
+    md = md.replace(/^###### (.*)$/gm,"<h6>$1</h6>").replace(/^##### (.*)$/gm,"<h5>$1</h5>")
+           .replace(/^#### (.*)$/gm,"<h4>$1</h4>").replace(/^### (.*)$/gm,"<h3>$1</h3>")
+           .replace(/^## (.*)$/gm,"<h2>$1</h2>").replace(/^# (.*)$/gm,"<h1>$1</h1>");
+    md = md.replace(/\*\*([^*]+)\*\*/g,"<b>$1</b>").replace(/\*([^*]+)\*/g,"<i>$1</i>");
+    md = md.replace(/^(?:- |\* )(.*)$/gm,"<li>$1</li>");
+    md = md.replace(/(<li>[\s\S]*?<\/li>\n?)+/g, m => `<ul>${m}</ul>`);
+    md = md.replace(/\n\n+/g,"</p><p>");
+    return `<div class="md"><p>${md}</p></div>`;
+  }
+
+  function renderTable(d) {
+    const cols = d.columns || [];
+    const rows = d.rows || [];
+    let h = "<table><thead><tr>";
+    for (const c of cols) h += `<th>${esc(c)}</th>`;
+    h += "</tr></thead><tbody>";
+    for (const r of rows) { h += "<tr>"; for (const cell of r) h += `<td>${esc(cell)}</td>`; h += "</tr>"; }
+    h += "</tbody></table>";
+    return h;
+  }
+
+  function renderChart(d) {
+    const type = d.type === "line" ? "line" : "bar";
+    const labels = d.labels || [];
+    const series = (d.series || []).slice(0, 6);
+    const W = 900, H = 280, padL = 40, padB = 30, padT = 10, padR = 10;
+    const innerW = W - padL - padR, innerH = H - padT - padB;
+    const all = series.flatMap(s => s.values || []);
+    const max = Math.max(1, ...all);
+    const min = Math.min(0, ...all);
+    const span = max - min || 1;
+    const colors = ["#6ea8fe","#7ee787","#f2c35c","#ff7b72","#d2a8ff","#79c0ff"];
+    const xStep = innerW / Math.max(1, labels.length);
+    let svg = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">`;
+    // axes
+    svg += `<line x1="${padL}" y1="${H-padB}" x2="${W-padR}" y2="${H-padB}" stroke="#2a313a"/>`;
+    svg += `<line x1="${padL}" y1="${padT}" x2="${padL}" y2="${H-padB}" stroke="#2a313a"/>`;
+    for (let i=0;i<labels.length;i++){
+      const x = padL + xStep*(i+.5);
+      svg += `<text x="${x}" y="${H-padB+14}" fill="#7d8696" font-size="10" text-anchor="middle">${esc(labels[i])}</text>`;
+    }
+    series.forEach((s, si) => {
+      const col = colors[si % colors.length];
+      const vals = s.values || [];
+      if (type === "bar") {
+        const bw = Math.max(2, (xStep / series.length) - 4);
+        vals.forEach((v,i) => {
+          const x = padL + xStep*i + (xStep/series.length)*si + 2;
+          const h = innerH * ((v - min) / span);
+          svg += `<rect x="${x}" y="${H-padB-h}" width="${bw}" height="${h}" fill="${col}"/>`;
+        });
+      } else {
+        let path = "";
+        vals.forEach((v,i) => {
+          const x = padL + xStep*(i+.5);
+          const y = H-padB - innerH * ((v - min) / span);
+          path += (i === 0 ? "M" : "L") + x + "," + y + " ";
+        });
+        svg += `<path d="${path}" fill="none" stroke="${col}" stroke-width="2"/>`;
+      }
+      svg += `<text x="${W-padR}" y="${padT+14+si*14}" fill="${col}" font-size="11" text-anchor="end">${esc(s.name||"")}</text>`;
+    });
+    svg += "</svg>";
+    return `<div class="chart">${svg}</div>`;
+  }
+
+  // Very conservative HTML sanitizer — strips script/style/event handlers.
+  function sanitizeHtml(html) {
+    html = String(html);
+    html = html.replace(/<\/?(?:script|style|iframe|object|embed|link|meta)\b[^>]*>/gi, "");
+    html = html.replace(/\son\w+\s*=\s*(['"]).*?\1/gi, "");
+    html = html.replace(/\son\w+\s*=\s*[^\s>]+/gi, "");
+    html = html.replace(/javascript:/gi, "");
+    return html;
+  }
+
+  function renderItem(it) {
+    let body = "";
+    try {
+      if (it.kind === "markdown") body = mdToHtml(it.data);
+      else if (it.kind === "table") body = renderTable(it.data);
+      else if (it.kind === "chart") body = renderChart(it.data);
+      else if (it.kind === "html") body = sanitizeHtml(it.data);
+      else if (it.kind === "code") body = `<pre><code>${esc((it.data && it.data.source) || "")}</code></pre>`;
+      else if (it.kind === "json") body = `<pre><code>${esc(JSON.stringify(it.data, null, 2))}</code></pre>`;
+    } catch (e) { body = `<pre>render error: ${esc(e.message)}</pre>`; }
+    return `<article class="item">
+      <header>
+        <div><span class="kind">${it.kind}</span><span class="title">${esc(it.title || "(untitled)")}</span></div>
+        <div class="ts">${esc(it.sessionId)} · ${fmtTs(it.createdAt)}</div>
+      </header>
+      <div class="body">${body}</div>
+    </article>`;
+  }
+
+  async function load() {
+    const s = sessionInput.value.trim();
+    const url = s ? `/api/canvas?session=${encodeURIComponent(s)}` : "/api/canvas";
+    try {
+      const r = await fetch(url, { headers: H() });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = await r.json();
+      const list = document.getElementById("list");
+      const items = j.items || [];
+      if (items.length === 0) { list.innerHTML = `<div class="empty">no canvas items${s?` for session "${esc(s)}"`:""}.</div>`; return; }
+      list.innerHTML = items.slice().reverse().map(renderItem).join("");
+    } catch (e) {
+      document.getElementById("list").innerHTML = `<div class="empty">error: ${esc(e.message)}</div>`;
+    }
+  }
+
+  document.getElementById("refresh").onclick = load;
+  sessionInput.addEventListener("change", load);
+  document.getElementById("clear").onclick = async () => {
+    const s = sessionInput.value.trim();
+    if (!confirm(s ? `clear canvas for session "${s}"?` : "clear entire canvas?")) return;
+    const body = s ? { session: s } : { all: true };
+    await fetch("/api/canvas/clear", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...H() },
+      body: JSON.stringify(body),
+    });
+    load();
+  };
+  setInterval(() => { if (document.getElementById("auto").checked) load(); }, 3000);
+  load();
+</script>
+</body>
+</html>

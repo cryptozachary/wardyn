@@ -11,9 +11,12 @@ export interface ChatMessage {
   tool_call_id?: string;
 }
 
+export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+
 export interface CallPayload {
   messages: ChatMessage[];
   tools?: ToolDef[];
+  thinkingLevel?: ThinkingLevel;
 }
 
 export interface LLMResponse {

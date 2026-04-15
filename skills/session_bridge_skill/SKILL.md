@@ -1,0 +1,1 @@
+session_bridge_skill — coordinate across sessions. Use this when one session needs to post a note into another (e.g., heartbeat strategist posting a finding into the main chat session), or to peek at a sister session's recent activity. Actions: list (enumerate recent sessions), history (fetch messages of a session), send (append a system-authored note into a target session).

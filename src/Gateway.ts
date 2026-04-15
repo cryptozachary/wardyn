@@ -8,12 +8,14 @@ import { Message } from "./types.js";
 import { loadKeys, storeKey } from "./security/keyVault.js";
 import { sendTelegramReply, extractChatId } from "./channels/telegram.js";
 import { sendDiscordReply, extractChannelId, startDiscordBot, isDiscordBotRunning } from "./channels/discord.js";
+import { startWhatsapp, isWhatsappRunning } from "./channels/whatsapp.js";
 import { sendSlackReply, extractSlackChannelId, isSlackBotMessage, isSlackUrlVerification, isSlackMessageEvent, getSlackSigningSecret, verifySlackSignature } from "./channels/slack.js";
 import { loadChannelConfig, saveChannelConfig, getMaskedConfig, clearChannelConfigCache, migrateChannelSecrets } from "./channels/channelConfig.js";
 import { attachWebSocket } from "./channels/websocket.js";
 import { loadHeartbeatConfig, startHeartbeat, type HeartbeatController } from "./orchestrator/heartbeat.js";
 import { seedFromJson, listJobs, getJob, createJob, updateJob, deleteJob } from "./orchestrator/heartbeatStore.js";
-import { listSessions, loadSession, cleanExpiredSessions, searchSessions } from "./orchestrator/sessionStore.js";
+import { listSessions, loadSession, cleanExpiredSessions, searchSessions, setThinkingLevel, THINKING_LEVELS, type ThinkingLevel } from "./orchestrator/sessionStore.js";
+import { pushCanvas, listCanvas, getCanvas, clearCanvas, type CanvasKind } from "./orchestrator/canvasStore.js";
 import { getProviderName, setProviderName, getModelConfig, setModel } from "./llm/router.js";
 import { buildSkill } from "./builder/builderAgent.js";
 import { deleteSkill, isProtected } from "./builder/skillWriter.js";
@@ -26,6 +28,7 @@ import { ZeroizingCache } from "./security/zeroize.js";
 import { safeStatic } from "./security/pathGuard.js";
 import { getAllQuotas, getQuotaStatus } from "./security/quotaTracker.js";
 import { submitForApproval, approveSkill, rejectSkill, listApprovals, getApproval, isApprovalRequired } from "./security/approvalQueue.js";
+import { checkPairing, pairingMessage, approveByCode, approve as approvePairing, revoke as revokePairing, listPairings, type Channel as PairingChannel } from "./security/pairingGuard.js";
 import { assertCodeSafe } from "./security/astAnalyzer.js";
 import { upload, fileToAttachment, cleanExpiredUploads, UPLOADS_DIR } from "./uploads/uploadHandler.js";
 import { createServer } from "http";
@@ -126,6 +129,7 @@ app.use((_req, res, next) => {
 // Serve static UI with path traversal protection
 app.use("/ui", ...safeStatic(path.join(process.cwd(), "public")));
 app.get("/chat", (_req, res) => res.sendFile(path.join(process.cwd(), "public", "chat.html")));
+app.get("/canvas", (_req, res) => res.sendFile(path.join(process.cwd(), "public", "canvas.html")));
 
 // Serve skill output files with path traversal protection
 app.use("/output", ...safeStatic(path.join(process.cwd(), "output")));
@@ -464,13 +468,20 @@ app.delete("/api/skill-secrets", requireAuth, (req, res) => {
 
 app.post('/webhook/telegram', rateLimit, async (req, res) => {
   try {
+    const chatId = extractChatId(req.body);
+    const pairing = checkPairing("telegram", String(chatId || "unknown"));
+    if (!pairing.approved) {
+      if (chatId) {
+        try { await sendTelegramReply(chatId, pairingMessage("telegram", pairing.code!)); } catch {}
+      }
+      return res.json({ ok: true, pairing: "required" });
+    }
     const msg = normalizeTelegram(req.body);
     const key = getProviderKey();
     const result = await runAgentLoop(msg, skills, key, {
-      sessionId: "default"
+      sessionId: `telegram:${chatId}`
     });
     if (result.final) {
-      const chatId = extractChatId(req.body);
       if (chatId) {
         try { await sendTelegramReply(chatId, result.final); } catch {}
       }
@@ -482,13 +493,20 @@ app.post('/webhook/telegram', rateLimit, async (req, res) => {
 });
 app.post('/webhook/discord', rateLimit, async (req, res) => {
   try {
+    const channelId = extractChannelId(req.body);
+    const pairing = checkPairing("discord", String(channelId || "unknown"));
+    if (!pairing.approved) {
+      if (channelId) {
+        try { await sendDiscordReply(channelId, pairingMessage("discord", pairing.code!)); } catch {}
+      }
+      return res.json({ ok: true, pairing: "required" });
+    }
     const msg = normalizeDiscord(req.body);
     const key = getProviderKey();
     const result = await runAgentLoop(msg, skills, key, {
-      sessionId: "default"
+      sessionId: `discord:${channelId}`
     });
     if (result.final) {
-      const channelId = extractChannelId(req.body);
       if (channelId) {
         try { await sendDiscordReply(channelId, result.final); } catch {}
       }
@@ -539,19 +557,87 @@ app.post('/webhook/slack', rateLimit, async (req, res) => {
   if (eventId) processedSlackEvents.add(eventId);
 
   try {
+    const channelId = extractSlackChannelId(req.body);
+    const userId = req.body.event?.user ?? "unknown";
+    const pairKey = channelId ? `${channelId}:${userId}` : String(userId);
+    const pairing = checkPairing("slack", pairKey);
+    if (!pairing.approved) {
+      if (channelId) {
+        try { await sendSlackReply(channelId, pairingMessage("slack", pairing.code!)); } catch {}
+      }
+      return res.json({ ok: true, pairing: "required" });
+    }
     const msg = normalizeSlack(req.body);
     const key = getProviderKey();
     const result = await runAgentLoop(msg, skills, key, {
-      sessionId: "default"
+      sessionId: `slack:${pairKey}`
     });
     if (result.final) {
-      const channelId = extractSlackChannelId(req.body);
       if (channelId) await sendSlackReply(channelId, result.final);
     }
     res.json(result);
   } catch (err: any) {
     res.status(500).json({ ok: false, error: err.message });
   }
+});
+
+// --- Canvas endpoints ---
+app.get("/api/canvas", requireAuth, (req, res) => {
+  const session = req.query.session as string | undefined;
+  const limit = Math.min(Number(req.query.limit) || 100, 500);
+  res.json({ ok: true, items: listCanvas(session, limit) });
+});
+app.get("/api/canvas/:id", requireAuth, (req, res) => {
+  const item = getCanvas(req.params.id);
+  if (!item) return res.status(404).json({ ok: false, error: "not found" });
+  res.json({ ok: true, item });
+});
+app.post("/api/canvas", requireAuth, (req, res) => {
+  const { session, kind, data, title } = req.body || {};
+  if (!session || !kind || data === undefined) {
+    return res.status(400).json({ ok: false, error: "session, kind, data required" });
+  }
+  try {
+    const item = pushCanvas(session, kind as CanvasKind, data, title);
+    res.json({ ok: true, item });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+app.post("/api/canvas/clear", requireAuth, (req, res) => {
+  const { session, all } = req.body || {};
+  const deleted = clearCanvas(all ? undefined : session);
+  res.json({ ok: true, deleted });
+});
+
+// --- Pairing endpoints ---
+app.get("/api/pairings", requireAuth, (_req, res) => {
+  res.json({ ok: true, pairings: listPairings() });
+});
+
+app.post("/api/pairings/approve", requireAuth, (req, res) => {
+  const { code, channel, externalId } = req.body || {};
+  try {
+    if (code) {
+      const p = approveByCode(String(code));
+      if (!p) return res.status(404).json({ ok: false, error: "code not found or already approved" });
+      return res.json({ ok: true, pairing: p });
+    }
+    if (channel && externalId) {
+      const p = approvePairing(channel as PairingChannel, String(externalId));
+      return res.json({ ok: true, pairing: p });
+    }
+    res.status(400).json({ ok: false, error: "provide { code } or { channel, externalId }" });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.post("/api/pairings/revoke", requireAuth, (req, res) => {
+  const { channel, externalId } = req.body || {};
+  if (!channel || !externalId) return res.status(400).json({ ok: false, error: "channel and externalId required" });
+  const ok = revokePairing(channel as PairingChannel, String(externalId));
+  res.json({ ok });
 });
 
 // --- Channel config endpoints ---
@@ -601,6 +687,16 @@ app.get("/api/sessions/:id", requireAuth, (req, res) => {
   const session = loadSession(req.params.id);
   if (!session) return res.status(404).json({ ok: false, error: "session not found" });
   res.json(session);
+});
+
+app.post("/api/sessions/:id/thinking", requireAuth, (req, res) => {
+  const { level } = req.body || {};
+  if (!THINKING_LEVELS.includes(level)) {
+    return res.status(400).json({ ok: false, error: `level must be one of: ${THINKING_LEVELS.join(", ")}` });
+  }
+  const s = setThinkingLevel(req.params.id, level as ThinkingLevel);
+  if (!s) return res.status(404).json({ ok: false, error: "session not found" });
+  res.json({ ok: true, sessionId: s.id, thinkingLevel: s.thinkingLevel });
 });
 
 // --- File Upload endpoints ---
@@ -913,6 +1009,13 @@ if (heartbeatJobs.length > 0) {
 // Start Discord gateway bot
 startDiscordBot(skills, () => getProviderKey());
 
+// Start WhatsApp (opt-in via env)
+if (process.env.WHATSAPP_ENABLED === "1") {
+  startWhatsapp(skills, () => getProviderKey()).catch(err =>
+    console.warn(`[whatsapp] startup failed: ${err.message}`)
+  );
+}
+
 // Initialize encrypted skill secrets cache + migrate legacy plaintext if present
 migrateLegacySecrets();
 initSkillSecrets();
@@ -935,6 +1038,7 @@ server.listen(PORT, HOST, () => {
   if (isDiscordBotRunning()) channels.push("discord");
   if (channelCfg.telegram?.botToken) channels.push("telegram");
   if (channelCfg.slack?.botToken) channels.push("slack");
+  if (isWhatsappRunning()) channels.push("whatsapp");
 
   const notes: string[] = [];
   if (seeded > 0) notes.push(`seeded ${seeded} heartbeat job(s) from config`);

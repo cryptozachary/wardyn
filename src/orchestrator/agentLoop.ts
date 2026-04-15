@@ -8,7 +8,7 @@ import { auditLogger } from "../security/auditLog.js";
 import { checkLoop } from "../security/loopGuard.js";
 import { checkLLMQuota, checkSkillQuota } from "../security/quotaTracker.js";
 import {
-  Session, SessionMessage,
+  Session, SessionMessage, ThinkingLevel, THINKING_LEVELS,
   getOrCreateSession, appendToSession, compactIfNeeded, saveSession
 } from "./sessionStore.js";
 
@@ -17,6 +17,9 @@ const STRATEGIST_ENTRY = /\b(strategist mode|run strategist|find me ideas|idea s
 
 // Phrases that EXIT strategist mode
 const STRATEGIST_EXIT = /\b(exit strategist|stop strategist|done with ideas|leave strategist)\b/i;
+
+// Per-session thinking-level trigger: "/thinking high" or "thinking: medium"
+const THINKING_TRIGGER = /\b(?:\/?thinking(?:\s+level)?[:\s]+)(off|minimal|low|medium|high|xhigh)\b/i;
 
 // Strategist mode is persisted on Session.strategistMode — survives restarts.
 
@@ -81,6 +84,14 @@ export async function runAgentLoop(
   }
   const strategistActive = session.strategistMode;
 
+  // Per-session thinking-level control. "/thinking high" updates the session
+  // and persists across turns.
+  const thinkingMatch = msg.text.match(THINKING_TRIGGER);
+  if (thinkingMatch) {
+    const lvl = thinkingMatch[1].toLowerCase() as ThinkingLevel;
+    if (THINKING_LEVELS.includes(lvl)) session.thinkingLevel = lvl;
+  }
+
   const ctx = loadContext(strategistActive);
   const toolDefs = tools.map(t => ({ name: t.name, description: t.description, parameters: t.parameters }));
   const toolList = tools.map(t => `- ${t.name}: ${t.description}`).join("\n");
@@ -139,7 +150,7 @@ export async function runAgentLoop(
 
     onStream?.({ type: "thinking", iteration: iterations });
 
-    const llmResponse = await callLLM({ messages, tools: toolDefs }, providerKey);
+    const llmResponse = await callLLM({ messages, tools: toolDefs, thinkingLevel: session.thinkingLevel }, providerKey);
 
     if (!llmResponse.tool_calls) {
       log(msg.id, { final: llmResponse.text, toolResults });
@@ -203,7 +214,7 @@ export async function runAgentLoop(
             try {
               validateArgs(parsed.args, msg.channel, sid);
               // Inject caller context so skills can detect autonomous execution
-              const argsWithContext = { ...parsed.args, _caller: msg.channel, _channel: msg.channel };
+              const argsWithContext = { ...parsed.args, _caller: msg.channel, _channel: msg.channel, _sessionId: sid };
               output = await skill.execute(argsWithContext, msg);
             } catch (err: any) {
               error = err.message;

@@ -19,8 +19,17 @@ export const openaiProvider: LLMProvider = {
   name: "openai",
 
   async callLLM(payload: CallPayload, apiKey: string): Promise<LLMResponse> {
+    // For o-series / gpt-5 reasoning models, map thinking level → reasoning_effort.
+    // For non-reasoning models the field is ignored server-side.
+    const effortMap: Record<string, string | undefined> = {
+      off: undefined, minimal: "minimal", low: "low", medium: "medium", high: "high", xhigh: "high",
+    };
+    const reasoningEffort = effortMap[payload.thinkingLevel ?? "medium"];
+    const model = getModel();
+    const supportsEffort = /^(o[134]|gpt-5|gpt-4\.\d-reason)/i.test(model);
+
     const res = await axios.post("https://api.openai.com/v1/chat/completions", {
-      model: getModel(),
+      model,
       messages: payload.messages,
       tools: payload.tools?.length ? payload.tools.map(t => ({
         type: "function",
@@ -29,7 +38,8 @@ export const openaiProvider: LLMProvider = {
           description: t.description ?? "Skill tool",
           parameters: t.parameters ?? { type: "object", properties: {}, additionalProperties: true }
         }
-      })) : undefined
+      })) : undefined,
+      ...(supportsEffort && reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
     }, { headers: { Authorization: `Bearer ${apiKey}` } });
 
     const choice = res.data.choices[0].message;
