@@ -51,5 +51,8 @@ export function verifySlackSignature(
   if (Math.abs(now - Number(timestamp)) > 300) return false;
   const baseString = `v0:${timestamp}:${rawBody}`;
   const computed = "v0=" + crypto.createHmac("sha256", signingSecret).update(baseString).digest("hex");
-  return crypto.timingSafeEqual(Buffer.from(computed), Buffer.from(signature));
+  const a = Buffer.from(computed);
+  const b = Buffer.from(signature);
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
 }

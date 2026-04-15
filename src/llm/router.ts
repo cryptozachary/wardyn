@@ -4,6 +4,7 @@ import { anthropicProvider } from "./providers/anthropic.js";
 import { ollamaProvider } from "./providers/ollama.js";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import path from "path";
+import { loadKeys } from "../security/keyVault.js";
 
 const providers: Record<string, LLMProvider> = {
   openai: openaiProvider,
@@ -156,7 +157,6 @@ function getFallbackKey(providerName: string, currentKey: string): string | null
 
   // Try loading from encrypted vault
   try {
-    const { loadKeys } = require("../security/keyVault.js");
     const keys = loadKeys(process.env.KEY_PASSPHRASE ?? "");
     if (keys[providerName]) return keys[providerName];
   } catch {}

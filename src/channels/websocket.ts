@@ -1,9 +1,10 @@
 import { WebSocketServer, WebSocket } from "ws";
 import type { Server } from "http";
-import { randomUUID } from "crypto";
+import { randomUUID, createHmac, timingSafeEqual } from "crypto";
 import { Message, Attachment, SkillMeta, OnStream } from "../types.js";
 import { runAgentLoop } from "../orchestrator/agentLoop.js";
 import { getAttachmentById } from "../uploads/uploadHandler.js";
+import { checkRateLimit } from "../security/rateLimit.js";
 
 interface WsIncoming {
   type: "message" | "new_session";
@@ -13,24 +14,49 @@ interface WsIncoming {
   attachmentIds?: string[];
 }
 
-/* ───────── Per-connection rate limiter ───────── */
+/* ───────── Durable rate limiter (SQLite-backed) ───────── */
 
 const WS_RATE_WINDOW_MS = 60_000;
-const WS_RATE_MAX = Number(process.env.WS_RATE_LIMIT) || 20; // messages per minute per connection
+const WS_RATE_MAX = Number(process.env.WS_RATE_LIMIT) || 20; // messages per minute per key
 
-interface RateState {
-  timestamps: number[];
-  warned: boolean;
+interface RateState { warned: boolean }
+
+function checkWsRate(key: string): boolean {
+  return checkRateLimit("ws", key, WS_RATE_WINDOW_MS, WS_RATE_MAX);
 }
 
-function checkWsRate(state: RateState): boolean {
-  const now = Date.now();
-  state.timestamps = state.timestamps.filter(t => now - t < WS_RATE_WINDOW_MS);
-  if (state.timestamps.length >= WS_RATE_MAX) {
-    return false;
+function safeEq(a: string, b: string): boolean {
+  const ab = Buffer.from(a); const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  return timingSafeEqual(ab, bb);
+}
+
+function parseCookies(header: string | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!header) return out;
+  for (const part of header.split(";")) {
+    const idx = part.indexOf("=");
+    if (idx < 0) continue;
+    const k = part.slice(0, idx).trim();
+    const v = part.slice(idx + 1).trim();
+    if (k) out[k] = decodeURIComponent(v);
   }
-  state.timestamps.push(now);
-  return true;
+  return out;
+}
+
+function validateCookieSession(cookieHeader: string | undefined): boolean {
+  const secret = process.env.COOKIE_SECRET || process.env.API_TOKEN;
+  if (!secret) return false;
+  const cookies = parseCookies(cookieHeader);
+  const token = cookies["secureclaw_auth"];
+  if (!token) return false;
+  const parts = token.split(".");
+  if (parts.length !== 3) return false;
+  const [expStr, nonce, sig] = parts;
+  const exp = Number(expStr);
+  if (!Number.isFinite(exp) || exp < Date.now()) return false;
+  const expected = createHmac("sha256", secret).update(`${expStr}.${nonce}`).digest("hex");
+  return safeEq(expected, sig);
 }
 
 /* ───────── WebSocket server ───────── */
@@ -47,23 +73,31 @@ export function attachWebSocket(
     const connUrl = new URL(req.url ?? "/", `http://${req.headers.host}`);
 
     if (apiToken) {
-      const token = connUrl.searchParams.get("token");
-      if (token !== apiToken) {
+      const qToken = connUrl.searchParams.get("token");
+      const headerToken = (req.headers["x-api-token"] as string | undefined) || "";
+      const cookieOk = validateCookieSession(req.headers.cookie);
+      const headerOk = !!headerToken && safeEq(headerToken, apiToken);
+      const queryOk = !!qToken && safeEq(qToken, apiToken);
+      if (!cookieOk && !headerOk && !queryOk) {
         ws.close(4001, "unauthorized");
         return;
       }
+    } else if (process.env.NODE_ENV === "production") {
+      ws.close(4001, "unauthorized");
+      return;
     }
 
     // Use a consistent default session so all channels share history
     let sessionId = connUrl.searchParams.get("sessionId") || "default";
     const userId = "default";
 
-    // Per-connection rate limiter
-    const rateState: RateState = { timestamps: [], warned: false };
+    // Shared/durable rate limiter (SQLite-backed, per-IP key)
+    const rateKey = (req.socket.remoteAddress || "unknown") + ":" + (req.headers["x-forwarded-for"] || "");
+    const rateState: RateState = { warned: false };
 
     ws.on("message", async (raw) => {
       // Rate limit check
-      if (!checkWsRate(rateState)) {
+      if (!checkWsRate(rateKey)) {
         if (!rateState.warned) {
           sendJson(ws, { type: "error", error: "Rate limit exceeded. Max " + WS_RATE_MAX + " messages/minute." });
           rateState.warned = true;

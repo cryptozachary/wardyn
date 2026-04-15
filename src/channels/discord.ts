@@ -2,6 +2,7 @@ import { Client, GatewayIntentBits, Message as DiscordMessage, Partials } from "
 import { loadChannelConfig } from "./channelConfig.js";
 import { Message, SkillMeta } from "../types.js";
 import { runAgentLoop } from "../orchestrator/agentLoop.js";
+import { createPublicKey, verify as cryptoVerify } from "crypto";
 
 let client: Client | null = null;
 
@@ -166,4 +167,33 @@ export async function sendDiscordReply(channelId: string, text: string) {
 
 export function extractChannelId(body: any): string {
   return body.channel_id ?? "";
+}
+
+/**
+ * Verify an Ed25519 signature on a Discord interaction webhook.
+ * Discord signs `timestamp + rawBody` with the application's public key.
+ * Returns false when the public key is missing or signature does not verify.
+ */
+export function verifyDiscordSignature(
+  publicKeyHex: string,
+  signatureHex: string,
+  timestamp: string,
+  rawBody: string,
+): boolean {
+  try {
+    if (!publicKeyHex || !signatureHex || !timestamp || !rawBody) return false;
+    const pubRaw = Buffer.from(publicKeyHex, "hex");
+    if (pubRaw.length !== 32) return false;
+    // Wrap raw 32-byte key in a DER SubjectPublicKeyInfo for Ed25519.
+    const der = Buffer.concat([
+      Buffer.from("302a300506032b6570032100", "hex"),
+      pubRaw,
+    ]);
+    const key = createPublicKey({ key: der, format: "der", type: "spki" });
+    const sig = Buffer.from(signatureHex, "hex");
+    const data = Buffer.from(timestamp + rawBody, "utf8");
+    return cryptoVerify(null, data, key, sig);
+  } catch {
+    return false;
+  }
 }

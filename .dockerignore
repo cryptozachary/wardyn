@@ -1,0 +1,31 @@
+.git
+.github
+node_modules
+dist
+coverage
+
+# secrets & state
+.env
+.env.*
+!.env.example
+config/*.enc
+config/providers.enc
+config/*.key
+data
+logs
+uploads
+output
+sessions
+backups
+memory
+skills_pending
+sandbox
+
+# dev scaffolding
+*.log
+*.tmp
+.vscode
+.idea
+README.md
+docs
+tests

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Secure-Claw · Login</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    body { font-family: system-ui, sans-serif; background: #0b0d12; color: #e6e9ef; display: grid; place-items: center; min-height: 100vh; margin: 0; }
+    form { background: #141821; padding: 2rem; border-radius: 8px; width: min(360px, 90vw); box-shadow: 0 4px 24px rgba(0,0,0,.4); }
+    h1 { margin-top: 0; font-size: 1.25rem; }
+    input { width: 100%; box-sizing: border-box; padding: .6rem; margin-bottom: 1rem; border: 1px solid #2a2f3a; background: #0b0d12; color: inherit; border-radius: 4px; font-family: inherit; }
+    button { width: 100%; padding: .65rem; background: #3b82f6; color: white; border: 0; border-radius: 4px; font-weight: 600; cursor: pointer; }
+    button:hover { background: #2563eb; }
+    .err { color: #f87171; font-size: .9rem; margin-top: .5rem; min-height: 1.2rem; }
+  </style>
+</head>
+<body>
+  <form id="f">
+    <h1>Secure-Claw</h1>
+    <label for="token">API Token</label>
+    <input id="token" type="password" autocomplete="current-password" autofocus required>
+    <button type="submit">Sign in</button>
+    <div class="err" id="err"></div>
+  </form>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const next = params.get("next") || "/ui/";
+    document.getElementById("f").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const token = document.getElementById("token").value;
+      const err = document.getElementById("err");
+      err.textContent = "";
+      try {
+        const r = await fetch("/api/auth/login", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token }),
+        });
+        if (!r.ok) { err.textContent = "Invalid token"; return; }
+        location.href = next;
+      } catch (ex) {
+        err.textContent = ex.message || "network error";
+      }
+    });
+  </script>
+</body>
+</html>

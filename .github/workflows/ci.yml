@@ -29,5 +29,20 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Run security tests
+      - name: Security tests
         run: npx tsx tests/security.test.ts
+
+      - name: Integration tests
+        run: npx tsx tests/integration.test.ts
+
+      - name: Smoke test (boot compiled server)
+        env:
+          SMOKE_PORT: 18085
+        run: npx tsx tests/smoke.test.ts
+
+      - name: Backup/restore round-trip
+        run: |
+          npx tsx scripts/backup.ts
+          BACKUP_DIR=$(ls -td backups/secureclaw-* | head -1)
+          echo "Restoring from $BACKUP_DIR"
+          npx tsx scripts/restore.ts --from "$BACKUP_DIR" --force

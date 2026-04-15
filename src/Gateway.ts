@@ -35,7 +35,22 @@ import { createServer } from "http";
 import { getDb, closeDb } from "./db.js";
 import dotenv from "dotenv";
 import os from "os";
+import {
+  requireAuth,
+  requireCsrf,
+  authForBrowser,
+  isAuthenticated,
+  issueSessionCookie,
+  clearSessionCookie,
+  validateApiToken,
+  assertProdAuthConfig,
+} from "./security/auth.js";
+import { verifyDiscordSignature } from "./channels/discord.js";
+import { sqliteRateLimit } from "./security/rateLimit.js";
+import { log, requestLogger as requestLoggerMiddleware, snapshotMetrics } from "./security/logger.js";
 dotenv.config();
+
+assertProdAuthConfig();
 
 const BOOT_START = Date.now();
 
@@ -43,8 +58,10 @@ const BOOT_START = Date.now();
 getDb();
 
 const app = express();
+app.set("trust proxy", process.env.TRUST_PROXY || "loopback");
+app.use(requestLoggerMiddleware());
 app.use(bodyParser.json({
-  limit: "1mb",
+  limit: process.env.BODY_LIMIT || "1mb",
   verify: (req: any, _res, buf) => { req.rawBody = buf.toString(); },
 }));
 const skills = loadSkills();
@@ -75,39 +92,8 @@ function getProviderKey(): string {
   return keys[provider] ?? keys["openai"] ?? "";
 }
 
-function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
-  if (!API_TOKEN) return next(); // optional
-  const token = req.get("x-api-token");
-  if (token === API_TOKEN) return next();
-  return res.status(401).json({ ok: false, error: "unauthorized" });
-}
-
-// Simple in-memory rate limiter
-const RATE_WINDOW_MS = 60_000;
 const RATE_MAX = Number(process.env.RATE_LIMIT) || 30;
-const hits = new Map<string, number[]>();
-
-function rateLimit(req: express.Request, res: express.Response, next: express.NextFunction) {
-  const ip = req.ip ?? "unknown";
-  const now = Date.now();
-  const timestamps = (hits.get(ip) ?? []).filter(t => now - t < RATE_WINDOW_MS);
-  if (timestamps.length >= RATE_MAX) {
-    return res.status(429).json({ ok: false, error: "rate limit exceeded" });
-  }
-  timestamps.push(now);
-  hits.set(ip, timestamps);
-  return next();
-}
-
-// Clean up stale entries every 5 minutes
-setInterval(() => {
-  const now = Date.now();
-  for (const [ip, timestamps] of hits) {
-    const active = timestamps.filter(t => now - t < RATE_WINDOW_MS);
-    if (active.length === 0) hits.delete(ip);
-    else hits.set(ip, active);
-  }
-}, 300_000).unref();
+const rateLimit = sqliteRateLimit({ windowMs: 60_000, max: RATE_MAX, bucket: "http" });
 
 // Security headers on every response
 app.use((_req, res, next) => {
@@ -120,19 +106,68 @@ app.use((_req, res, next) => {
     "Content-Security-Policy",
     "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:*; font-src 'self'; frame-ancestors 'none'"
   );
-  if (process.env.ENABLE_HSTS === "true") {
+  if (process.env.NODE_ENV === "production" || process.env.ENABLE_HSTS === "true") {
     res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
   }
   next();
 });
 
-// Serve static UI with path traversal protection
-app.use("/ui", ...safeStatic(path.join(process.cwd(), "public")));
-app.get("/chat", (_req, res) => res.sendFile(path.join(process.cwd(), "public", "chat.html")));
-app.get("/canvas", (_req, res) => res.sendFile(path.join(process.cwd(), "public", "canvas.html")));
+// --- Public/admin listener split ---
+// Admin port hosts /api/*, /ui, /chat, /canvas, /output, /ws management.
+// Public port hosts /webhook/*, /health, /ws chat.
+const ADMIN_PORT = Number(process.env.ADMIN_PORT) || 0; // 0 = same listener as public
+const ADMIN_HOST = process.env.ADMIN_HOST || "127.0.0.1";
+const ADMIN_ONLY_PREFIXES = ["/api/", "/ui", "/chat", "/canvas", "/output", "/uploads", "/login"];
+const PUBLIC_ONLY_PREFIXES = ["/webhook/"];
 
-// Serve skill output files with path traversal protection
-app.use("/output", ...safeStatic(path.join(process.cwd(), "output")));
+function isAdminOnly(url: string): boolean {
+  return ADMIN_ONLY_PREFIXES.some(p => url === p || url.startsWith(p + (p.endsWith("/") ? "" : "/")) || url.startsWith(p + "?"));
+}
+function isPublicOnly(url: string): boolean {
+  return PUBLIC_ONLY_PREFIXES.some(p => url.startsWith(p));
+}
+
+app.use((req, res, next) => {
+  if (!ADMIN_PORT) return next();
+  const port = (req.socket as any).localPort as number | undefined;
+  const onAdmin = port === ADMIN_PORT;
+  if (onAdmin && isPublicOnly(req.path)) return res.status(404).json({ ok: false, error: "not found" });
+  if (!onAdmin && isAdminOnly(req.path)) return res.status(404).json({ ok: false, error: "not found" });
+  next();
+});
+
+// --- Auth routes (must precede gated routes) ---
+app.get("/login", (_req, res) => res.sendFile(path.join(process.cwd(), "public", "login.html")));
+// Login is pre-CSRF because it is how a session is first established.
+app.post("/api/auth/login", rateLimit, (req, res) => {
+  const { token } = req.body || {};
+  if (typeof token !== "string" || !validateApiToken(token)) {
+    return res.status(401).json({ ok: false, error: "unauthorized" });
+  }
+  issueSessionCookie(res);
+  res.json({ ok: true });
+});
+// Status check — GET, no side effects, no CSRF needed.
+app.get("/api/auth/status", (req, res) => {
+  res.json({ ok: true, authenticated: isAuthenticated(req) });
+});
+
+// CSRF enforcement on cookie-auth mutating requests (must precede mutating /api/* routes)
+app.use("/api", requireCsrf);
+
+// Logout post-CSRF so forced-logout via CSRF is blocked.
+app.post("/api/auth/logout", (_req, res) => {
+  clearSessionCookie(res);
+  res.json({ ok: true });
+});
+
+// Serve static UI with path traversal protection (auth-gated)
+app.use("/ui", authForBrowser, ...safeStatic(path.join(process.cwd(), "public")));
+app.get("/chat", authForBrowser, (_req, res) => res.sendFile(path.join(process.cwd(), "public", "chat.html")));
+app.get("/canvas", authForBrowser, (_req, res) => res.sendFile(path.join(process.cwd(), "public", "canvas.html")));
+
+// Serve skill output files with path traversal protection (auth-gated)
+app.use("/output", authForBrowser, ...safeStatic(path.join(process.cwd(), "output")));
 function normalizeTelegram(body: any): Message {
   return { id: String(body.update_id ?? Date.now()), channel: "telegram", userId: String(body.message?.from?.id ?? "unknown"), text: body.message?.text ?? "", ts: Date.now() };
 }
@@ -468,6 +503,13 @@ app.delete("/api/skill-secrets", requireAuth, (req, res) => {
 
 app.post('/webhook/telegram', rateLimit, async (req, res) => {
   try {
+    const expectedSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
+    if (!expectedSecret) {
+      return res.status(503).json({ ok: false, error: "telegram webhook secret not configured" });
+    }
+    if (req.get("x-telegram-bot-api-secret-token") !== expectedSecret) {
+      return res.status(401).json({ ok: false, error: "invalid telegram secret" });
+    }
     const chatId = extractChatId(req.body);
     const pairing = checkPairing("telegram", String(chatId || "unknown"));
     if (!pairing.approved) {
@@ -493,6 +535,16 @@ app.post('/webhook/telegram', rateLimit, async (req, res) => {
 });
 app.post('/webhook/discord', rateLimit, async (req, res) => {
   try {
+    const publicKey = process.env.DISCORD_PUBLIC_KEY;
+    if (!publicKey) {
+      return res.status(404).json({ ok: false, error: "not found" });
+    }
+    const sig = req.get("x-signature-ed25519") ?? "";
+    const ts = req.get("x-signature-timestamp") ?? "";
+    const raw = (req as any).rawBody ?? "";
+    if (!verifyDiscordSignature(publicKey, sig, ts, raw)) {
+      return res.status(401).json({ ok: false, error: "invalid discord signature" });
+    }
     const channelId = extractChannelId(req.body);
     const pairing = checkPairing("discord", String(channelId || "unknown"));
     if (!pairing.approved) {
@@ -528,15 +580,16 @@ app.post('/webhook/slack', rateLimit, async (req, res) => {
     return res.json({ challenge: req.body.challenge });
   }
 
-  // Verify signature if signing secret is configured
+  // Slack signature is mandatory — no optional bypass.
   const signingSecret = getSlackSigningSecret();
-  if (signingSecret) {
-    const timestamp = req.get("x-slack-request-timestamp") ?? "";
-    const signature = req.get("x-slack-signature") ?? "";
-    const rawBody = (req as any).rawBody ?? "";
-    if (!verifySlackSignature(signingSecret, timestamp, rawBody, signature)) {
-      return res.status(401).json({ ok: false, error: "invalid signature" });
-    }
+  if (!signingSecret) {
+    return res.status(503).json({ ok: false, error: "slack signing secret not configured" });
+  }
+  const timestamp = req.get("x-slack-request-timestamp") ?? "";
+  const signature = req.get("x-slack-signature") ?? "";
+  const rawBody = (req as any).rawBody ?? "";
+  if (!verifySlackSignature(signingSecret, timestamp, rawBody, signature)) {
+    return res.status(401).json({ ok: false, error: "invalid signature" });
   }
 
   // Only process message events
@@ -983,20 +1036,28 @@ function buildHealthPayload(authenticated: boolean) {
 }
 
 app.get('/health', (req, res) => {
-  const token = req.get("x-api-token");
-  const authed = !API_TOKEN || token === API_TOKEN;
-  res.json(buildHealthPayload(authed));
+  res.json(buildHealthPayload(isAuthenticated(req)));
 });
 
 app.get('/api/health', requireAuth, (_req, res) => {
   res.json(buildHealthPayload(true));
 });
 
+// Metrics endpoint (admin-only)
+app.get('/api/metrics', requireAuth, (_req, res) => {
+  res.json({ ok: true, metrics: snapshotMetrics() });
+});
+
 // Create HTTP server shared by Express and WebSocket
 const server = createServer(app);
+let adminServer: ReturnType<typeof createServer> | null = null;
+if (ADMIN_PORT) {
+  adminServer = createServer(app);
+}
 
 // Attach WebSocket control plane
 attachWebSocket(server, skills, () => getProviderKey(), API_TOKEN);
+if (adminServer) attachWebSocket(adminServer, skills, () => getProviderKey(), API_TOKEN);
 
 // Seed heartbeat jobs from JSON config on first run, then start from SQLite
 const seeded = seedFromJson();
@@ -1061,12 +1122,38 @@ ${notes.length ? "\n  " + notes.map(n => "• " + n).join("\n  ") + "\n" : ""}
 `);
 });
 
-// Graceful shutdown — stop heartbeat timers and close SQLite
-for (const sig of ["SIGINT", "SIGTERM"] as const) {
-  process.on(sig, () => {
-    console.log(`\n[shutdown] Received ${sig}, shutting down...`);
-    heartbeatCtrl?.shutdown();
-    closeDb();
-    process.exit(0);
+if (adminServer) {
+  adminServer.listen(ADMIN_PORT, ADMIN_HOST, () => {
+    log.info("admin.listening", { host: ADMIN_HOST, port: ADMIN_PORT });
   });
+}
+
+// Graceful shutdown — drain HTTP, stop heartbeat timers, close SQLite
+let shuttingDown = false;
+function gracefulShutdown(sig: string) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  log.info("shutdown.start", { signal: sig });
+  const timer = setTimeout(() => {
+    log.warn("shutdown.force");
+    process.exit(1);
+  }, 10_000);
+  timer.unref();
+  try { heartbeatCtrl?.shutdown(); } catch {}
+  const servers: Array<{ close: (cb?: (err?: Error) => void) => void }> = [server];
+  if (adminServer) servers.push(adminServer);
+  let remaining = servers.length;
+  const done = () => {
+    if (--remaining > 0) return;
+    try { closeDb(); } catch {}
+    log.info("shutdown.complete");
+    clearTimeout(timer);
+    process.exit(0);
+  };
+  for (const s of servers) {
+    try { s.close(() => done()); } catch { done(); }
+  }
+}
+for (const sig of ["SIGINT", "SIGTERM"] as const) {
+  process.on(sig, () => gracefulShutdown(sig));
 }

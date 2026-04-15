@@ -41,18 +41,27 @@ export interface PatternInfo {
   hitCount: number;
 }
 
-function sanitizeArgs(args: Record<string, unknown>): Record<string, unknown> {
-  const clean: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(args)) {
-    if (SENSITIVE_KEY.test(k)) {
-      clean[k] = "***";
-    } else if (typeof v === "string") {
-      clean[k] = v.length > 100 ? v.slice(0, 100) + "..." : v;
-    } else {
-      clean[k] = v;
-    }
+function sanitizeValue(key: string | null, value: unknown, seen: WeakSet<object>, depth: number): unknown {
+  if (depth > 8) return "[depth-limit]";
+  if (key !== null && SENSITIVE_KEY.test(key)) return "***";
+  if (value === null || value === undefined) return value;
+  if (typeof value === "string") return value.length > 100 ? value.slice(0, 100) + "..." : value;
+  if (typeof value !== "object") return value;
+  if (seen.has(value as object)) return "[cycle]";
+  seen.add(value as object);
+  if (Array.isArray(value)) {
+    return value.map(v => sanitizeValue(null, v, seen, depth + 1));
   }
-  return clean;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    out[k] = sanitizeValue(k, v, seen, depth + 1);
+  }
+  return out;
+}
+
+function sanitizeArgs(args: Record<string, unknown>): Record<string, unknown> {
+  const seen = new WeakSet<object>();
+  return sanitizeValue(null, args, seen, 0) as Record<string, unknown>;
 }
 
 function hashEvent(event: AuditEvent): string {
