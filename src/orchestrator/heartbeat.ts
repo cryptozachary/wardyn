@@ -315,7 +315,9 @@ async function executeFixedJob(
   let error: string | undefined;
   let result: any;
   try {
-    result = await runAgentLoop(msg, skills, getApiKey());
+    result = await runAgentLoop(msg, skills, getApiKey(), {
+      sessionId: `heartbeat-${job.name}`
+    });
     onResult?.(job, result);
   } catch (err: any) {
     error = err.message;
