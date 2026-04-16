@@ -2,60 +2,47 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Secure-Claw Setup</title>
+  <title>Bastion — Setup</title>
+  <link rel="stylesheet" href="/ui/styles.css" />
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0c162f; color: #e2e8f0; min-height: 100vh; padding: 24px 16px; }
-    .container { max-width: 720px; margin: 0 auto; }
-    h1 { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
-    .subtitle { font-size: 13px; color: #64748b; margin-bottom: 20px; }
-    .provider-badge { display: inline-block; padding: 3px 10px; border-radius: 12px; background: #1e3a5f; color: #60a5fa; font-size: 12px; font-weight: 600; margin-left: 8px; vertical-align: middle; }
-    .provider-badge.ollama { background: #1a3320; color: #4ade80; }
-    .provider-badge.anthropic { background: #2d1f3d; color: #c084fc; }
-
-    section { background: #141d35; border: 1px solid #1e2d4a; border-radius: 10px; padding: 20px; margin-bottom: 16px; }
-    section h2 { font-size: 15px; font-weight: 600; color: #94a3b8; margin-bottom: 12px; }
-
-    label { display: block; margin: 10px 0 4px; font-size: 13px; font-weight: 600; color: #94a3b8; }
-    input, textarea, select { width: 100%; padding: 9px 12px; border-radius: 6px; border: 1px solid #1e2d4a; background: #1e293b; color: #e2e8f0; font-size: 14px; font-family: inherit; }
-    input::placeholder, textarea::placeholder { color: #475569; }
-    input:focus, textarea:focus, select:focus { outline: none; border-color: #0f62fe; }
-    select { cursor: pointer; appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2364748b' d='M6 8L1 3h10z'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; padding-right: 32px; }
-
-    button { width: 100%; margin-top: 10px; padding: 10px; border: none; border-radius: 6px; background: #0f62fe; color: #fff; font-weight: 700; font-size: 14px; cursor: pointer; transition: background 0.15s; }
-    button:hover:not(:disabled) { background: #2563eb; }
-    button:disabled { background: #1e3a5f; color: #475569; cursor: not-allowed; }
-    .btn-secondary { background: #1e293b; color: #94a3b8; border: 1px solid #1e2d4a; }
-    .btn-secondary:hover:not(:disabled) { background: #2d3a52; color: #e2e8f0; }
-
     .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-    .msg { font-size: 13px; margin-top: 8px; min-height: 18px; }
-    .msg.ok { color: #4ade80; }
-    .msg.err { color: #fca5a5; }
-
-    .status-bar { display: flex; align-items: center; gap: 8px; padding: 10px 16px; background: #111827; border: 1px solid #1e2d4a; border-radius: 8px; margin-bottom: 16px; font-size: 13px; }
-    .status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-    .status-dot.ok { background: #22c55e; }
-    .status-dot.warn { background: #f59e0b; }
-    .status-dot.off { background: #475569; }
-
     .ollama-panel { background: #1a332020; border: 1px solid #1a3320; border-radius: 8px; padding: 16px; margin-top: 10px; display: none; }
     .ollama-panel label { color: #86efac; }
     .ollama-panel input, .ollama-panel select { border-color: #1a3320; }
     .btn-ollama { background: #166534; }
     .btn-ollama:hover:not(:disabled) { background: #15803d; }
     .model-list { font-size: 12px; color: #86efac; margin-top: 6px; }
-
-    pre { background: #1e293b; padding: 10px; border-radius: 6px; overflow: auto; font-size: 13px; color: #94a3b8; min-height: 36px; }
-
-    .nav-link { display: inline-block; margin-top: 12px; color: #60a5fa; font-size: 13px; text-decoration: none; }
-    .nav-link:hover { text-decoration: underline; }
+    .h-card { background:#1e293b; border:1px solid #1e2d4a; border-radius:6px; padding:10px; }
+    .h-label { color:#64748b; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; }
+    .h-value { color:#e2e8f0; font-weight:600; margin-top:3px; }
+    .h-value.ok { color:#4ade80; }
+    .h-value.warn { color:#f59e0b; }
+    .h-value.off { color:#64748b; }
+    .h-sub { color:#94a3b8; font-size:11px; margin-top:2px; }
   </style>
 </head>
 <body>
-  <div class="container">
-    <h1>Secure-Claw Setup</h1>
-    <p class="subtitle">Configure your AI agent gateway</p>
+  <nav class="navbar">
+    <a class="navbar-brand" href="/ui/hub.html">
+      <span class="brand-prefix">&gt;</span>bastion
+    </a>
+    <div class="nav-links">
+      <a class="nav-link" href="/ui/hub.html">Hub</a>
+      <a class="nav-link" href="/chat">Chat</a>
+      <a class="nav-link" href="/ui/skills.html">Skills</a>
+      <a class="nav-link" href="/ui/canvas.html">Canvas</a>
+      <a class="nav-link" href="/ui/heartbeat.html">Heartbeat</a>
+      <a class="nav-link" href="/ui/approvals.html">Approvals</a>
+      <a class="nav-link" href="/ui/security.html">Security</a>
+      <a class="nav-link active" href="/ui/setup.html">Setup</a>
+    </div>
+  </nav>
+
+  <div class="container-xs">
+    <div class="page-header">
+      <h1 class="page-title">setup</h1>
+    </div>
+    <p class="page-subtitle">Configure your agent gateway</p>
 
     <div class="status-bar">
       <div class="status-dot off" id="statusDot"></div>
@@ -75,16 +62,6 @@
         <span class="msg" id="backupMsg" style="margin:0; flex:1;"></span>
       </div>
     </section>
-
-    <style>
-      .h-card { background:#1e293b; border:1px solid #1e2d4a; border-radius:6px; padding:10px; }
-      .h-label { color:#64748b; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; }
-      .h-value { color:#e2e8f0; font-weight:600; margin-top:3px; }
-      .h-value.ok { color:#4ade80; }
-      .h-value.warn { color:#f59e0b; }
-      .h-value.off { color:#64748b; }
-      .h-sub { color:#94a3b8; font-size:11px; margin-top:2px; }
-    </style>
 
     <section>
       <h2>Gateway Token</h2>
@@ -197,9 +174,6 @@
       <button id="healthBtn" class="btn-secondary">Ping /health</button>
       <pre id="healthOut"></pre>
     </section>
-
-    <a class="nav-link" href="/chat">Open Chat &rarr;</a>
-    <a class="nav-link" href="/ui/skills.html" style="margin-left:16px">Skill Builder &rarr;</a>
   </div>
 
 <script>
@@ -242,12 +216,15 @@ function authHeaders() {
   return t ? { 'x-api-token': t } : {};
 }
 
-// --- Persist token ---
+// --- Persist token (migrate from old key) ---
+if (!localStorage.getItem('bastion_api_token') && localStorage.getItem('secureclaw_api_token')) {
+  localStorage.setItem('bastion_api_token', localStorage.getItem('secureclaw_api_token'));
+}
 function loadToken() {
-  document.getElementById('apiToken').value = localStorage.getItem('secureclaw_api_token') || '';
+  document.getElementById('apiToken').value = localStorage.getItem('bastion_api_token') || '';
 }
 document.getElementById('apiToken').addEventListener('input', () => {
-  localStorage.setItem('secureclaw_api_token', document.getElementById('apiToken').value.trim());
+  localStorage.setItem('bastion_api_token', document.getElementById('apiToken').value.trim());
 });
 
 // --- Provider selector ---

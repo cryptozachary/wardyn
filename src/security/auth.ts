@@ -1,8 +1,8 @@
 import type { Request, Response, NextFunction } from "express";
 import { createHmac, randomBytes, timingSafeEqual } from "crypto";
 
-const COOKIE_NAME = "secureclaw_auth";
-const CSRF_COOKIE = "secureclaw_csrf";
+const COOKIE_NAME = "bastion_auth";
+const CSRF_COOKIE = "bastion_csrf";
 const CSRF_HEADER = "x-csrf-token";
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 

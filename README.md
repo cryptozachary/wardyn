@@ -1,6 +1,6 @@
-# Secure-Claw
+# Bastion
 
-Secure-Claw is a self-hosted agent gateway exposing a WebSocket + REST control plane
+Bastion is a self-hosted agent gateway exposing a WebSocket + REST control plane
 for an LLM-driven skill runtime. This README covers operations: how to boot it,
 what to configure, and how to keep it safe in production.
 
@@ -35,7 +35,7 @@ Open `http://127.0.0.1:3000/login` and sign in with the `API_TOKEN`.
 | `WS_RATE_LIMIT` | no | `20` | WebSocket msgs/min per connection. |
 | `TELEGRAM_WEBHOOK_SECRET` | per channel | — | Required to accept `/webhook/telegram`. |
 | `DISCORD_PUBLIC_KEY` | per channel | — | Ed25519 hex; required to accept `/webhook/discord`. |
-| Slack signing secret | per channel | — | Stored in `config/channels.enc`. Required for `/webhook/slack`. |
+| Slack signing secret | per channel | — | Stored in encrypted vault (`config/providers.enc`). Required for `/webhook/slack`. |
 | `ENABLE_HSTS` | no | off (on in prod) | Forces `Strict-Transport-Security` even in dev. |
 | `LOG_LEVEL` | no | `info` | One of `debug`/`info`/`warn`/`error`. |
 
@@ -45,7 +45,7 @@ Two callers are supported:
 
 1. **Server-to-server**: send `x-api-token: $API_TOKEN`. Bypasses CSRF.
 2. **Browser**: POST the token to `/api/auth/login`. Server sets an
-   `HttpOnly; SameSite=Strict` session cookie and a `secureclaw_csrf` cookie.
+   `HttpOnly; SameSite=Strict` session cookie and a `bastion_csrf` cookie.
    Mutating requests (POST/PUT/DELETE) must echo the CSRF cookie back as
    `x-csrf-token`. Logout is `POST /api/auth/logout`.
 
@@ -97,21 +97,21 @@ server {
 ```bash
 # 1. Store the provider key (encrypted under KEY_PASSPHRASE)
 npm run store-key
-# 2. Configure channel tokens via /api/channels/config (or channels.enc)
+# 2. Configure channel tokens via /api/channels/config (stored in providers.enc)
 # 3. Seed heartbeat jobs in config/heartbeat.json, then boot.
 ```
 
 ## Deploy
 
 ```bash
-docker build -t secureclaw -f docker/sandbox.dockerfile .
-docker run -d --name secureclaw \
+docker build -t bastion -f docker/sandbox.dockerfile .
+docker run -d --name bastion \
   -e API_TOKEN=... -e KEY_PASSPHRASE=... -e COOKIE_SECRET=... -e NODE_ENV=production \
   -e ADMIN_PORT=3001 \
   -p 127.0.0.1:3000:3000 -p 127.0.0.1:3001:3001 \
-  -v /srv/secureclaw/data:/app/data \
-  -v /srv/secureclaw/config:/app/config \
-  secureclaw
+  -v /srv/bastion/data:/app/data \
+  -v /srv/bastion/config:/app/config \
+  bastion
 ```
 
 ## Rollback
@@ -132,7 +132,7 @@ while the server is up unless `--force`.
 
 ## Desktop (Electron)
 
-Secure-Claw can be run as an Electron desktop app. First-run bootstrap uses
+Bastion can be run as an Electron desktop app. First-run bootstrap uses
 **Option C**: a vault passphrase held in the user's head, plus lower-value
 session tokens stored in the OS keychain (via Electron's `safeStorage`).
 

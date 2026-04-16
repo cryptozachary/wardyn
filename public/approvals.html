@@ -2,43 +2,27 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Secure-Claw Skill Approvals</title>
+  <title>Bastion — Approvals</title>
+  <link rel="stylesheet" href="/ui/styles.css" />
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0c162f; color: #e2e8f0; min-height: 100vh; }
-
-    .header { display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: #141d35; border-bottom: 1px solid #1e2d4a; flex-wrap: wrap; }
-    .header h1 { font-size: 16px; font-weight: 600; color: #94a3b8; }
-    .nav-links { display: flex; gap: 8px; margin-left: auto; }
-    .nav-link { padding: 6px 12px; border: 1px solid #1e2d4a; border-radius: 6px; background: #1e293b; color: #94a3b8; font-size: 12px; text-decoration: none; }
-    .nav-link:hover { background: #2d3a52; color: #e2e8f0; }
-    .nav-link.active { background: #0f62fe; color: #fff; border-color: #0f62fe; }
-
-    .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
-
-    .status-bar { display: flex; gap: 12px; margin-bottom: 16px; align-items: center; }
-    .status-pill { padding: 6px 14px; border-radius: 20px; font-size: 12px; font-weight: 600; cursor: pointer; border: 1px solid #1e2d4a; background: #141d35; color: #94a3b8; }
-    .status-pill.active { background: #0f62fe; color: #fff; border-color: #0f62fe; }
+    .status-pill { padding: 6px 14px; border-radius: 20px; font-size: 12px; font-weight: 600; cursor: pointer; border: 1px solid var(--border); background: var(--surface); color: #94a3b8; }
+    .status-pill.active { background: var(--accent); color: #fff; border-color: var(--accent); }
     .status-pill .count { background: rgba(255,255,255,0.15); padding: 1px 6px; border-radius: 10px; margin-left: 4px; font-size: 11px; }
 
-    .approval-mode { margin-left: auto; font-size: 12px; color: #64748b; }
+    .approval-mode { margin-left: auto; font-size: 12px; color: var(--text-muted); }
     .approval-mode .mode-badge { display: inline-block; padding: 3px 8px; border-radius: 4px; font-weight: 600; }
     .approval-mode .mode-badge.on { background: #14532d; color: #4ade80; border: 1px solid #22c55e; }
     .approval-mode .mode-badge.off { background: #422006; color: #facc15; border: 1px solid #eab308; }
 
-    .empty-state { text-align: center; padding: 60px 20px; color: #475569; }
-    .empty-state .icon { font-size: 48px; margin-bottom: 12px; }
-    .empty-state p { font-size: 14px; }
-
-    .approval-card { background: #141d35; border: 1px solid #1e2d4a; border-radius: 10px; padding: 20px; margin-bottom: 12px; }
-    .approval-card.has-blockers { border-color: #ef4444; }
+    .approval-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 12px; }
+    .approval-card.has-blockers { border-color: var(--danger); }
     .approval-card .card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
-    .card-header .skill-name { font-size: 16px; font-weight: 600; color: #e2e8f0; }
+    .card-header .skill-name { font-size: 16px; font-weight: 600; color: var(--text); }
     .card-header .badge { padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; text-transform: uppercase; }
     .badge.build { background: #1e3a5f; color: #60a5fa; }
     .badge.import { background: #3b1f4e; color: #c084fc; }
 
-    .card-meta { display: flex; gap: 16px; margin-bottom: 12px; font-size: 12px; color: #64748b; }
+    .card-meta { display: flex; gap: 16px; margin-bottom: 12px; font-size: 12px; color: var(--text-muted); }
 
     .ast-warnings { margin-bottom: 12px; }
     .ast-warnings h4 { font-size: 12px; color: #94a3b8; margin-bottom: 6px; text-transform: uppercase; }
@@ -47,22 +31,18 @@
     .warning-item.warn { background: #422006; color: #fde68a; }
     .warning-item.info { background: #1e293b; color: #94a3b8; }
     .warning-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
-    .warning-item.block .warning-dot { background: #ef4444; }
-    .warning-item.warn .warning-dot { background: #eab308; }
-    .warning-item.info .warning-dot { background: #64748b; }
+    .warning-item.block .warning-dot { background: var(--danger); }
+    .warning-item.warn .warning-dot { background: var(--warning); }
+    .warning-item.info .warning-dot { background: var(--text-muted); }
 
-    .code-preview { background: #0c162f; border: 1px solid #1e2d4a; border-radius: 6px; padding: 12px; margin-bottom: 12px; max-height: 200px; overflow-y: auto; font-family: monospace; font-size: 12px; white-space: pre-wrap; color: #94a3b8; display: none; }
+    .code-preview { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-bottom: 12px; max-height: 200px; overflow-y: auto; font-family: monospace; font-size: 12px; white-space: pre-wrap; color: #94a3b8; display: none; }
     .code-preview.show { display: block; }
 
     .card-actions { display: flex; gap: 8px; align-items: center; }
-    .btn { padding: 8px 16px; border-radius: 6px; font-size: 13px; font-weight: 600; border: none; cursor: pointer; }
-    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
     .btn-approve { background: #16a34a; color: #fff; }
     .btn-approve:hover:not(:disabled) { background: #15803d; }
     .btn-reject { background: #dc2626; color: #fff; }
     .btn-reject:hover:not(:disabled) { background: #b91c1c; }
-    .btn-secondary { background: #1e293b; color: #94a3b8; border: 1px solid #1e2d4a; }
-    .btn-secondary:hover { background: #2d3a52; color: #e2e8f0; }
 
     .resolved-status { font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 12px; }
     .resolved-status.approved { background: #14532d; color: #4ade80; }
@@ -70,18 +50,21 @@
   </style>
 </head>
 <body>
-  <div class="header">
-    <h1>Skill Approvals</h1>
+  <nav class="navbar">
+    <a class="navbar-brand" href="/ui/hub.html">
+      <span class="brand-prefix">&gt;</span>bastion
+    </a>
     <div class="nav-links">
-      <a class="nav-link" href="/ui/chat.html">Chat</a>
-      <a class="nav-link" href="/ui/skills.html">Skills</a>
       <a class="nav-link" href="/ui/hub.html">Hub</a>
-      <a class="nav-link active" href="/ui/approvals.html">Approvals</a>
+      <a class="nav-link" href="/chat">Chat</a>
+      <a class="nav-link" href="/ui/skills.html">Skills</a>
+      <a class="nav-link" href="/ui/canvas.html">Canvas</a>
       <a class="nav-link" href="/ui/heartbeat.html">Heartbeat</a>
+      <a class="nav-link active" href="/ui/approvals.html">Approvals</a>
       <a class="nav-link" href="/ui/security.html">Security</a>
       <a class="nav-link" href="/ui/setup.html">Setup</a>
     </div>
-  </div>
+  </nav>
 
   <div class="container">
     <div class="status-bar">

@@ -2,97 +2,69 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Secure-Claw — Skill Builder</title>
+  <title>Bastion — Skills</title>
+  <link rel="stylesheet" href="/ui/styles.css" />
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0c162f; color: #e2e8f0; min-height: 100vh; padding: 24px 16px; }
-    .container { max-width: 800px; margin: 0 auto; }
-    h1 { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
-    .subtitle { font-size: 13px; color: #64748b; margin-bottom: 20px; }
-    .provider-badge { display: inline-block; padding: 3px 10px; border-radius: 12px; background: #1e3a5f; color: #60a5fa; font-size: 12px; font-weight: 600; margin-left: 8px; vertical-align: middle; }
-    .provider-badge.ollama { background: #1a3320; color: #4ade80; }
-    .provider-badge.anthropic { background: #2d1f3d; color: #c084fc; }
-
-    .header-row { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
-    .header-row h1 { margin-bottom: 0; }
-    .nav-links { margin-left: auto; display: flex; gap: 12px; }
-    .nav-links a { color: #60a5fa; font-size: 13px; text-decoration: none; }
-    .nav-links a:hover { text-decoration: underline; }
-
-    section { background: #141d35; border: 1px solid #1e2d4a; border-radius: 10px; padding: 20px; margin-bottom: 16px; }
-    section h2 { font-size: 15px; font-weight: 600; color: #94a3b8; margin-bottom: 12px; }
-
-    label { display: block; margin: 10px 0 4px; font-size: 13px; font-weight: 600; color: #94a3b8; }
-    input, textarea, select { width: 100%; padding: 9px 12px; border-radius: 6px; border: 1px solid #1e2d4a; background: #1e293b; color: #e2e8f0; font-size: 14px; font-family: inherit; }
-    input::placeholder, textarea::placeholder { color: #475569; }
-    input:focus, textarea:focus, select:focus { outline: none; border-color: #0f62fe; }
-    select { cursor: pointer; appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2364748b' d='M6 8L1 3h10z'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; padding-right: 32px; }
-
-    button { width: 100%; margin-top: 10px; padding: 10px; border: none; border-radius: 6px; background: #0f62fe; color: #fff; font-weight: 700; font-size: 14px; cursor: pointer; transition: background 0.15s; }
-    button:hover:not(:disabled) { background: #2563eb; }
-    button:disabled { background: #1e3a5f; color: #475569; cursor: not-allowed; }
-    .btn-danger { background: #991b1b; }
-    .btn-danger:hover:not(:disabled) { background: #b91c1c; }
-
-    .msg { font-size: 13px; margin-top: 8px; min-height: 18px; }
-    .msg.ok { color: #4ade80; }
-    .msg.err { color: #fca5a5; }
-
-    /* Skills table */
+    /* Page-specific: skills */
     .skills-table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-    .skills-table th, .skills-table td { text-align: left; padding: 8px 12px; border-bottom: 1px solid #1e2d4a; font-size: 13px; }
-    .skills-table th { color: #64748b; font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .skills-table th, .skills-table td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 13px; }
+    .skills-table th { color: var(--text-muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
     .skills-table td { color: #cbd5e1; }
-    .skills-table tr:hover td { background: #1e293b; }
+    .skills-table tr:hover td { background: rgba(30,41,59,0.3); }
     .skill-name { font-weight: 600; color: #60a5fa; }
     .skill-status { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
-    .skill-status.active { background: #22c55e; }
-    .skill-status.inactive { background: #475569; }
-    .delete-btn { background: none; border: none; color: #64748b; cursor: pointer; font-size: 16px; padding: 2px 6px; width: auto; margin: 0; }
+    .skill-status.active { background: var(--success); }
+    .skill-status.inactive { background: var(--text-dim); }
+    .delete-btn { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 16px; padding: 2px 6px; width: auto; margin: 0; }
     .delete-btn:hover { color: #fca5a5; }
-    .protected { color: #475569; font-size: 11px; }
+    .protected { color: var(--text-dim); font-size: 11px; }
     .secrets-badge { display: inline-block; font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 4px; margin-left: 6px; }
     .secrets-badge.ok { background: #166534; color: #86efac; }
     .secrets-badge.missing { background: #7f1d1d; color: #fca5a5; }
-    .secrets-badge.none { background: #1e2d4a; color: #64748b; }
+    .secrets-badge.none { background: var(--border); color: var(--text-muted); }
 
-    /* Build section */
     .build-row { display: grid; grid-template-columns: 1fr 200px; gap: 12px; align-items: end; }
 
-    /* Progress */
     .progress { margin-top: 12px; display: none; }
-    .progress-step { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 13px; color: #64748b; }
+    .progress-step { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 13px; color: var(--text-muted); }
     .progress-step.active { color: #60a5fa; }
-    .progress-step.done { color: #4ade80; }
+    .progress-step.done { color: var(--success); }
     .progress-step.fail { color: #fca5a5; }
     .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #334155; border-top-color: #60a5fa; border-radius: 50%; animation: spin 0.6s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    /* Code preview */
     .code-preview { display: none; margin-top: 12px; }
     .code-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
-    .code-header span { font-size: 12px; color: #64748b; font-weight: 600; text-transform: uppercase; }
+    .code-header span { font-size: 12px; color: var(--text-muted); font-weight: 600; text-transform: uppercase; }
     .code-lang { padding: 2px 8px; border-radius: 4px; background: #1e3a5f; color: #60a5fa; font-size: 11px; font-weight: 600; }
-    pre { background: #0f172a; border: 1px solid #1e2d4a; padding: 12px; border-radius: 6px; overflow: auto; font-size: 13px; color: #94a3b8; max-height: 400px; white-space: pre-wrap; word-wrap: break-word; }
     pre.validation { max-height: 120px; }
     pre.validation.ok { border-color: #166534; }
     pre.validation.err { border-color: #991b1b; }
   </style>
 </head>
 <body>
-  <div class="container">
-    <div class="header-row">
-      <h1>Skill Builder</h1>
-      <span id="activeProvider" class="provider-badge">--</span>
-      <div class="nav-links">
-        <a href="/chat">Chat</a>
-        <a href="/ui/hub.html">Hub</a>
-        <a href="/ui/approvals.html">Approvals</a>
-        <a href="/ui/heartbeat.html">Heartbeat</a>
-        <a href="/ui/setup.html">Setup</a>
-      </div>
+  <nav class="navbar">
+    <a class="navbar-brand" href="/ui/hub.html">
+      <span class="brand-prefix">&gt;</span>bastion
+    </a>
+    <div class="nav-links">
+      <a class="nav-link" href="/ui/hub.html">Hub</a>
+      <a class="nav-link" href="/chat">Chat</a>
+      <a class="nav-link active" href="/ui/skills.html">Skills</a>
+      <a class="nav-link" href="/ui/canvas.html">Canvas</a>
+      <a class="nav-link" href="/ui/heartbeat.html">Heartbeat</a>
+      <a class="nav-link" href="/ui/approvals.html">Approvals</a>
+      <a class="nav-link" href="/ui/security.html">Security</a>
+      <a class="nav-link" href="/ui/setup.html">Setup</a>
     </div>
-    <p class="subtitle">Generate, validate, and deploy skills with natural language</p>
+  </nav>
+
+  <div class="container-sm">
+    <div class="page-header">
+      <h1 class="page-title">skills</h1>
+      <span id="activeProvider" class="badge provider-badge">--</span>
+    </div>
+    <p class="page-subtitle">Generate, validate, and deploy skills with natural language</p>
 
     <!-- Existing Skills -->
     <section>
@@ -102,7 +74,7 @@
           <tr><th>Name</th><th>Description</th><th>Status</th><th></th></tr>
         </thead>
         <tbody id="skillsBody">
-          <tr><td colspan="4" style="color:#475569">Loading...</td></tr>
+          <tr><td colspan="4" style="color:var(--text-dim)">Loading...</td></tr>
         </tbody>
       </table>
     </section>
@@ -113,8 +85,8 @@
       <label>Describe the skill you want to build</label>
       <textarea id="skillPrompt" rows="4" placeholder="e.g., A skill that converts CSV data to JSON format, supporting headers and custom delimiters"></textarea>
 
-      <label>Test Arguments <span style="font-weight:400; color:#475569;">(optional JSON — provide real values for URLs, file paths, etc.)</span></label>
-      <textarea id="testArgs" rows="2" placeholder='e.g., { "url": "https://httpbin.org/get", "count": 5 }' style="font-family: 'Consolas', 'Monaco', monospace; font-size: 12px;"></textarea>
+      <label>Test Arguments <span style="font-weight:400; color:var(--text-dim);">(optional JSON — provide real values for URLs, file paths, etc.)</span></label>
+      <textarea id="testArgs" rows="2" placeholder='e.g., { "url": "https://httpbin.org/get", "count": 5 }' style="font-family: var(--mono); font-size: 12px;"></textarea>
 
       <div class="build-row">
         <div>
@@ -147,7 +119,7 @@
           <span>Generated Code</span>
           <span class="code-lang" id="codeLang">TypeScript</span>
         </div>
-        <pre id="codeOutput"></pre>
+        <pre id="codeOutput" style="max-height:400px; white-space:pre-wrap; word-wrap:break-word;"></pre>
 
         <div id="wrapperSection" style="display:none; margin-top:8px;">
           <div class="code-header"><span>Wrapper (index.ts)</span></div>
@@ -165,7 +137,7 @@
             <span class="code-lang" id="smokeTestStatus">--</span>
           </div>
           <pre class="validation" id="smokeTestOutput"></pre>
-          <div style="font-size:12px; color:#64748b; margin-top:4px;" id="smokeTestDuration"></div>
+          <div style="font-size:12px; color:var(--text-muted); margin-top:4px;" id="smokeTestDuration"></div>
         </div>
 
         <div id="retrySection" style="display:none; margin-top:8px;">
@@ -180,7 +152,7 @@
 const PROTECTED = new Set(['exec_skill', 'filesystem_skill', 'browser_skill', 'web_fetch_skill']);
 
 function authHeaders() {
-  const t = localStorage.getItem('secureclaw_api_token') || '';
+  const t = localStorage.getItem('bastion_api_token') || localStorage.getItem('secureclaw_api_token') || '';
   return t ? { 'x-api-token': t } : {};
 }
 
@@ -192,7 +164,7 @@ async function fetchProvider() {
     const badge = document.getElementById('activeProvider');
     const name = j.provider || 'unknown';
     badge.textContent = name;
-    badge.className = 'provider-badge' + (name === 'ollama' ? ' ollama' : name === 'anthropic' ? ' anthropic' : '');
+    badge.className = 'badge provider-badge' + (name === 'ollama' ? ' ollama' : name === 'anthropic' ? ' anthropic' : '');
   } catch {}
 }
 
@@ -209,7 +181,7 @@ async function loadSkills() {
     const configuredSecrets = sj.secrets || {};
 
     if (!j.skills || j.skills.length === 0) {
-      body.innerHTML = '<tr><td colspan="4" style="color:#475569">No skills installed</td></tr>';
+      body.innerHTML = '<tr><td colspan="4" style="color:var(--text-dim)">No skills installed</td></tr>';
       return;
     }
     body.innerHTML = j.skills.map(s => {

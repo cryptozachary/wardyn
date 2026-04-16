@@ -144,8 +144,8 @@ async function run() {
       assert.strictEqual(r.status, 200);
       const set = ([] as string[]).concat(r.headers["set-cookie"] as any);
       for (const c of set) {
-        if (c.startsWith("secureclaw_auth=")) sessionCookie = c.split(";")[0];
-        if (c.startsWith("secureclaw_csrf=")) csrfCookie = c.split(";")[0].split("=")[1];
+        if (c.startsWith("bastion_auth=")) sessionCookie = c.split(";")[0];
+        if (c.startsWith("bastion_csrf=")) csrfCookie = c.split(";")[0].split("=")[1];
       }
       assert.ok(sessionCookie, "no session cookie issued");
       assert.ok(csrfCookie, "no csrf cookie issued");
@@ -163,7 +163,7 @@ async function run() {
 
     await test("session cookie POST without CSRF header -> 403", async () => {
       const r = await req(port, "POST", "/api/ping", {
-        headers: { cookie: `${sessionCookie}; secureclaw_csrf=${csrfCookie}` },
+        headers: { cookie: `${sessionCookie}; bastion_csrf=${csrfCookie}` },
         body: {},
       });
       assert.strictEqual(r.status, 403);
@@ -172,7 +172,7 @@ async function run() {
     await test("session cookie POST with matching CSRF header -> 200", async () => {
       const r = await req(port, "POST", "/api/ping", {
         headers: {
-          cookie: `${sessionCookie}; secureclaw_csrf=${csrfCookie}`,
+          cookie: `${sessionCookie}; bastion_csrf=${csrfCookie}`,
           "x-csrf-token": csrfCookie,
         },
         body: {},
@@ -183,7 +183,7 @@ async function run() {
     await test("session cookie POST with mismatched CSRF header -> 403", async () => {
       const r = await req(port, "POST", "/api/ping", {
         headers: {
-          cookie: `${sessionCookie}; secureclaw_csrf=${csrfCookie}`,
+          cookie: `${sessionCookie}; bastion_csrf=${csrfCookie}`,
           "x-csrf-token": "nope",
         },
         body: {},

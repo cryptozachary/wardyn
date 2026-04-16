@@ -48,7 +48,7 @@ function validateCookieSession(cookieHeader: string | undefined): boolean {
   const secret = process.env.COOKIE_SECRET || process.env.API_TOKEN;
   if (!secret) return false;
   const cookies = parseCookies(cookieHeader);
-  const token = cookies["secureclaw_auth"];
+  const token = cookies["bastion_auth"];
   if (!token) return false;
   const parts = token.split(".");
   if (parts.length !== 3) return false;

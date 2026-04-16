@@ -68,7 +68,7 @@ function windowOpts(width: number, height: number): Electron.BrowserWindowConstr
 
 async function showSetupWindow(): Promise<{ passphrase: string; apiToken: string; cookieSecret: string }> {
   return new Promise((resolve, reject) => {
-    setupWindow = new BrowserWindow({ ...windowOpts(520, 560), title: "Secure-Claw — First-run setup" });
+    setupWindow = new BrowserWindow({ ...windowOpts(520, 560), title: "Bastion — First-run setup" });
     setupWindow.loadFile(path.join(__dirname, "setup.html"));
 
     ipcMain.handleOnce("setup:submit", async (_evt, { passphrase }: { passphrase: string }) => {
@@ -104,7 +104,7 @@ async function showSetupWindow(): Promise<{ passphrase: string; apiToken: string
 
 async function showUnlockWindow(): Promise<string> {
   return new Promise((resolve, reject) => {
-    unlockWindow = new BrowserWindow({ ...windowOpts(420, 280), title: "Secure-Claw — Unlock vault" });
+    unlockWindow = new BrowserWindow({ ...windowOpts(420, 280), title: "Bastion — Unlock vault" });
     unlockWindow.loadFile(path.join(__dirname, "unlock.html"));
 
     ipcMain.handle("unlock:submit", async (_evt, { passphrase }: { passphrase: string }) => {
@@ -311,7 +311,7 @@ async function boot() {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 860,
-    title: "Secure-Claw",
+    title: "Bastion",
     autoHideMenuBar: true,
     webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false },
   });
