@@ -1,0 +1,38 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Unlock Secure-Claw</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { font-family: system-ui, sans-serif; margin: 0; padding: 24px; background: #111; color: #eee; }
+    h1 { margin: 0 0 6px; font-size: 18px; }
+    p  { margin: 0 0 14px; color: #aaa; font-size: 12px; }
+    input { width: 100%; box-sizing: border-box; padding: 8px 10px; background: #1c1c1c; color: #eee; border: 1px solid #333; border-radius: 4px; font: inherit; }
+    input:focus { outline: none; border-color: #4a8; }
+    button { padding: 8px 14px; border-radius: 4px; border: none; font: inherit; cursor: pointer; background: #4a8; color: #111; font-weight: 600; }
+    .err { color: #f88; font-size: 12px; margin-top: 8px; min-height: 16px; }
+    .row { display: flex; justify-content: flex-end; margin-top: 14px; }
+  </style>
+</head>
+<body>
+  <h1>Unlock vault</h1>
+  <p>Enter the passphrase you chose during setup.</p>
+  <input id="p" type="password" autofocus />
+  <div class="err" id="err"></div>
+  <div class="row">
+    <button id="go">Unlock</button>
+  </div>
+  <script>
+    const err = document.getElementById("err");
+    const p = document.getElementById("p");
+    async function submit() {
+      err.textContent = "";
+      const res = await window.secureclaw.unlockSubmit({ passphrase: p.value });
+      if (!res.ok) { err.textContent = res.error || "Failed."; p.select(); return; }
+    }
+    document.getElementById("go").addEventListener("click", submit);
+    p.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
+  </script>
+</body>
+</html>

@@ -1,0 +1,67 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Secure-Claw setup</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { font-family: system-ui, sans-serif; margin: 0; padding: 28px; background: #111; color: #eee; }
+    h1 { margin: 0 0 8px; font-size: 20px; }
+    p  { margin: 0 0 16px; color: #aaa; font-size: 13px; line-height: 1.5; }
+    label { display: block; font-size: 12px; color: #bbb; margin: 12px 0 4px; }
+    input { width: 100%; box-sizing: border-box; padding: 8px 10px; background: #1c1c1c; color: #eee; border: 1px solid #333; border-radius: 4px; font: inherit; }
+    input:focus { outline: none; border-color: #4a8; }
+    button { padding: 8px 14px; border-radius: 4px; border: none; font: inherit; cursor: pointer; }
+    .primary { background: #4a8; color: #111; font-weight: 600; }
+    .ghost { background: transparent; color: #bbb; }
+    .row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+    .err { color: #f88; font-size: 12px; margin-top: 8px; min-height: 16px; }
+    .token-box { background: #000; border: 1px solid #4a8; padding: 12px; border-radius: 4px; font-family: ui-monospace, monospace; font-size: 12px; word-break: break-all; margin: 12px 0; }
+  </style>
+</head>
+<body>
+  <div id="step-passphrase">
+    <h1>Welcome to Secure-Claw</h1>
+    <p>Choose a vault passphrase. It encrypts your provider API keys and is <b>required every launch</b>. It is never stored on disk — if you forget it, the vault cannot be recovered.</p>
+    <label>Passphrase (min 8 characters)</label>
+    <input id="p1" type="password" autofocus />
+    <label>Confirm</label>
+    <input id="p2" type="password" />
+    <div class="err" id="err"></div>
+    <div class="row">
+      <button class="ghost" onclick="window.secureclaw.setupCancel()">Cancel</button>
+      <button class="primary" id="go">Create vault</button>
+    </div>
+  </div>
+
+  <div id="step-token" style="display:none">
+    <h1>Save your API token</h1>
+    <p>This token grants full access to Secure-Claw. Copy it now if you want to hit the API from scripts or external tools. You can regenerate it later from settings.</p>
+    <div class="token-box" id="token"></div>
+    <div class="row">
+      <button class="primary" id="continue">Continue</button>
+    </div>
+  </div>
+
+  <script>
+    const err = document.getElementById("err");
+    const p1 = document.getElementById("p1");
+    const p2 = document.getElementById("p2");
+
+    async function submit() {
+      err.textContent = "";
+      if (p1.value.length < 8) { err.textContent = "Passphrase must be at least 8 characters."; return; }
+      if (p1.value !== p2.value) { err.textContent = "Passphrases don't match."; return; }
+      const res = await window.secureclaw.setupSubmit({ passphrase: p1.value });
+      if (!res.ok) { err.textContent = res.error || "Setup failed."; return; }
+      document.getElementById("step-passphrase").style.display = "none";
+      document.getElementById("step-token").style.display = "";
+      document.getElementById("token").textContent = res.apiToken;
+    }
+
+    document.getElementById("go").addEventListener("click", submit);
+    p2.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
+    document.getElementById("continue").addEventListener("click", () => window.close());
+  </script>
+</body>
+</html>

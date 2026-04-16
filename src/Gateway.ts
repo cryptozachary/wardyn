@@ -50,6 +50,11 @@ import { sqliteRateLimit } from "./security/rateLimit.js";
 import { log, requestLogger as requestLoggerMiddleware, snapshotMetrics } from "./security/logger.js";
 dotenv.config();
 
+{
+  const t = process.env.API_TOKEN;
+  process.stderr.write(`[gateway] NODE_ENV=${process.env.NODE_ENV} API_TOKEN present=${!!t} prefix=${t ? t.slice(0, 8) : "--"} len=${t?.length ?? 0}\n`);
+}
+
 assertProdAuthConfig();
 
 const BOOT_START = Date.now();
@@ -72,7 +77,7 @@ function reloadSkills() {
   skills.push(...fresh);
 }
 const PORT = Number(process.env.PORT) || 3000;
-const HOST = "127.0.0.1";
+const HOST = process.env.HOST || "127.0.0.1";
 const API_TOKEN = process.env.API_TOKEN;
 
 // Auto-zeroizing key cache: decrypted keys are wiped from memory after 60s of inactivity
@@ -141,6 +146,8 @@ app.get("/login", (_req, res) => res.sendFile(path.join(process.cwd(), "public",
 // Login is pre-CSRF because it is how a session is first established.
 app.post("/api/auth/login", rateLimit, (req, res) => {
   const { token } = req.body || {};
+  const envTok = process.env.API_TOKEN;
+  process.stderr.write(`[gateway] /api/auth/login submitted prefix=${typeof token === "string" ? token.slice(0, 8) : "--"} len=${typeof token === "string" ? token.length : 0} env prefix=${envTok ? envTok.slice(0, 8) : "--"} env len=${envTok?.length ?? 0}\n`);
   if (typeof token !== "string" || !validateApiToken(token)) {
     return res.status(401).json({ ok: false, error: "unauthorized" });
   }
@@ -923,9 +930,10 @@ app.post("/api/backup", requireAuth, async (req, res) => {
   const includeLogs = !!req.body?.includeLogs;
   try {
     const { spawn } = await import("child_process");
-    const args = ["tsx", "scripts/backup.ts"];
+    const scriptPath = path.resolve(process.cwd(), "dist/scripts/backup.js");
+    const args = [scriptPath];
     if (includeLogs) args.push("--include-logs");
-    const child = spawn("npx", args, { cwd: process.cwd(), shell: true });
+    const child = spawn(process.execPath, args, { cwd: process.cwd() });
     let out = ""; let err = "";
     child.stdout.on("data", d => { out += d.toString(); });
     child.stderr.on("data", d => { err += d.toString(); });

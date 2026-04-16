@@ -27,6 +27,7 @@ RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/skills ./skills
 COPY --from=builder /app/public ./public
+# scripts/ source is NOT copied — the backup endpoint spawns dist/scripts/backup.js
 # Writable data locations
 RUN mkdir -p data logs config uploads output sessions backups \
  && chown -R app:app /app

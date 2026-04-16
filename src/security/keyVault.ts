@@ -2,11 +2,16 @@ import { randomBytes, createCipheriv, createDecipheriv, scryptSync } from "crypt
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import path from "path";
 import { zeroBuffer } from "./zeroize.js";
-const VAULT_PATH = path.join(process.cwd(), "config", "providers.enc");
+function vaultPath(): string {
+  const base = process.env.DATA_DIR || process.cwd();
+  return path.join(base, "config", "providers.enc");
+}
+const VAULT_PATH_LEGACY = path.join(process.cwd(), "config", "providers.enc");
 export function storeKey(name: string, value: string, passphrase: string) {
+  const p = vaultPath();
   // Merge with existing vault if present
   let existing: Record<string, string> = {};
-  if (existsSync(VAULT_PATH)) {
+  if (existsSync(p)) {
     try {
       existing = loadKeys(passphrase);
     } catch (err) {
@@ -18,10 +23,11 @@ export function storeKey(name: string, value: string, passphrase: string) {
   const iv = randomBytes(12); const cipher = createCipheriv("aes-256-gcm", key, iv);
   const data = Buffer.concat([cipher.update(JSON.stringify(payload), "utf8"), cipher.final()]);
   const tag = cipher.getAuthTag();
-  writeFileSync(VAULT_PATH, Buffer.concat([salt, iv, tag, data]));
+  writeFileSync(p, Buffer.concat([salt, iv, tag, data]));
 }
 export function loadKeys(passphrase: string): Record<string, string> {
-  const buf = readFileSync(VAULT_PATH);
+  const p = vaultPath();
+  const buf = readFileSync(existsSync(p) ? p : VAULT_PATH_LEGACY);
   const salt = buf.subarray(0,16), iv = buf.subarray(16,28), tag = buf.subarray(28,44), data = buf.subarray(44);
   const derivedKey = scryptSync(passphrase, salt, 32);
   const decipher = createDecipheriv("aes-256-gcm", derivedKey, iv);

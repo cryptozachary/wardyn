@@ -10,5 +10,5 @@
     "strict": true,
     "skipLibCheck": true
   },
-  "include": ["src", "skills", "scripts"]
+  "include": ["src", "skills", "scripts", "electron"]
 }

@@ -130,6 +130,51 @@ while the server is up unless `--force`.
 - Pull a snapshot: `npm run backup -- --include-logs` and hand the archive to
   the responder.
 
+## Desktop (Electron)
+
+Secure-Claw can be run as an Electron desktop app. First-run bootstrap uses
+**Option C**: a vault passphrase held in the user's head, plus lower-value
+session tokens stored in the OS keychain (via Electron's `safeStorage`).
+
+```bash
+npm ci            # installs electron as a dev-dep
+npm run build     # compiles TS + copies electron assets to dist/
+npm run electron  # launches the desktop app
+```
+
+### First launch
+
+1. A setup window prompts the user to choose a vault passphrase (≥ 8 chars).
+2. The app generates a random `API_TOKEN` and `COOKIE_SECRET`, seeds the
+   encrypted provider vault with a placeholder entry (so the passphrase can
+   be round-trip-verified later), and stores the two tokens under
+   `userData/bootstrap.bin` encrypted with OS-managed `safeStorage`.
+3. The API token is shown **once** so the user can copy it for server-to-server
+   use. It is not recoverable after that window closes.
+
+### Subsequent launches
+
+1. An unlock window prompts for the vault passphrase. Wrong passphrase fails
+   silently without hitting the server.
+2. On success the main process spawns the gateway as a child with env vars
+   (`API_TOKEN`, `COOKIE_SECRET`, `KEY_PASSPHRASE`, `HOST=127.0.0.1`), waits
+   for `/health`, POSTs the token to `/api/auth/login`, and injects the
+   resulting cookie into the main `BrowserWindow` session before loading
+   `/ui/hub.html`. The user never sees a login screen.
+
+### Data dir
+
+In packaged mode, `DATA_DIR` = Electron's `userData` path (per-user isolated).
+In `npm run electron` dev mode, `DATA_DIR` = repo root so existing
+`config/`, `data/`, `memory/` directories are reused.
+
+### What Option C does NOT protect against
+
+- Malware running as the same OS user *while the app is running* can read
+  decrypted provider keys from gateway process memory. The vault passphrase
+  raises the bar for **offline** disk theft and **pre-unlock** compromise.
+- Losing the passphrase bricks the vault. Back it up out-of-band.
+
 ## Tests
 
 ```bash
