@@ -84,9 +84,21 @@
     let currentFilter = 'pending';
     let allApprovals = [];
 
+    function getToken() { return localStorage.getItem('bastion_api_token') || localStorage.getItem('secureclaw_api_token') || ''; }
+    function getCsrf() { const m = document.cookie.match(/(?:^|;\s*)bastion_csrf=([^;]+)/); return m ? m[1] : ''; }
+    function authHeaders(json) {
+      const h = {};
+      const t = getToken();
+      if (t) h['x-api-token'] = t;
+      const csrf = getCsrf();
+      if (csrf) h['x-csrf-token'] = csrf;
+      if (json) h['Content-Type'] = 'application/json';
+      return h;
+    }
+
     async function loadApprovals() {
       try {
-        const res = await fetch('/api/approvals');
+        const res = await fetch('/api/approvals', { headers: authHeaders() });
         const data = await res.json();
         allApprovals = data.approvals || [];
 
@@ -103,7 +115,7 @@
 
     async function loadConfig() {
       try {
-        const res = await fetch('/api/approvals/config/status');
+        const res = await fetch('/api/approvals/config/status', { headers: authHeaders() });
         const data = await res.json();
         const badge = document.getElementById('mode-badge');
         if (data.approvalRequired) {
@@ -198,7 +210,7 @@
     async function approveSkill(id) {
       if (!confirm('Approve and activate this skill?')) return;
       try {
-        const res = await fetch(`/api/approvals/${id}/approve`, { method: 'POST' });
+        const res = await fetch(`/api/approvals/${id}/approve`, { method: 'POST', headers: authHeaders() });
         const data = await res.json();
         if (data.ok) {
           loadApprovals();
@@ -216,7 +228,7 @@
       try {
         const res = await fetch(`/api/approvals/${id}/reject`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: authHeaders(true),
           body: JSON.stringify({ reason: reason || undefined }),
         });
         const data = await res.json();

@@ -57,7 +57,8 @@ export class ZeroizingCache {
     }
     try {
       this.keys = this.loadFn();
-    } catch {
+    } catch (err: any) {
+      console.warn(`[vault] Failed to decrypt key vault: ${err.message || err}`);
       this.keys = {};
     }
     this.resetTimer();

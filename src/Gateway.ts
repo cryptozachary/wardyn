@@ -87,9 +87,12 @@ function getKeys(): Record<string, string> {
 function getProviderKey(): string {
   const provider = getProviderName();
   const keys = getKeys();
-  // Ollama doesn't need a key
   if (provider === "ollama") return "ollama-local";
-  return keys[provider] ?? keys["openai"] ?? "";
+  const key = keys[provider] ?? keys["openai"] ?? "";
+  if (!key) {
+    console.warn(`[gateway] No API key found for provider "${provider}". Vault may be empty or passphrase mismatch. LLM calls will fall back to Ollama.`);
+  }
+  return key;
 }
 
 const RATE_MAX = Number(process.env.RATE_LIMIT) || 30;

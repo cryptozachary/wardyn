@@ -111,8 +111,11 @@ export async function callLLM(payload: CallPayload, apiKey: string, providerName
       throw formatError(provider.name, primaryErr);
     }
 
+    const detail = primaryErr.response?.data?.error?.message
+      || primaryErr.response?.data?.error
+      || primaryErr.message;
     console.warn(
-      `[router] Primary provider ${primaryName} failed: ${primaryErr.message}. Trying fallbacks: ${fallbacks.join(", ")}`
+      `[router] Primary provider ${primaryName} failed: ${detail}. Trying fallbacks: ${fallbacks.join(", ")}`
     );
 
     // Try each fallback
