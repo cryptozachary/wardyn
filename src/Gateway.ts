@@ -811,12 +811,21 @@ app.get("/api/security/tool-history", requireAuth, (req, res) => {
 app.get("/api/heartbeat/triage-log", requireAuth, (req, res) => {
   const limit = Math.min(Number(req.query.limit) || 50, 200);
   const offset = Number(req.query.offset) || 0;
+  const jobFilter = req.query.job as string | undefined;
+  const statusFilter = req.query.status as string | undefined;
   try {
     const db = getDb();
-    const total = (db.prepare("SELECT COUNT(*) as cnt FROM heartbeat_triage").get() as any).cnt;
+    const conditions: string[] = [];
+    const params: any[] = [];
+    if (jobFilter) { conditions.push("job = ?"); params.push(jobFilter); }
+    if (statusFilter === "acted") { conditions.push("acted = 1"); }
+    else if (statusFilter === "skipped") { conditions.push("acted = 0 AND error IS NULL"); }
+    else if (statusFilter === "error") { conditions.push("error IS NOT NULL"); }
+    const where = conditions.length ? " WHERE " + conditions.join(" AND ") : "";
+    const total = (db.prepare(`SELECT COUNT(*) as cnt FROM heartbeat_triage${where}`).get(...params) as any).cnt;
     const rows = db.prepare(
-      "SELECT * FROM heartbeat_triage ORDER BY ts DESC LIMIT ? OFFSET ?"
-    ).all(limit, offset) as any[];
+      `SELECT * FROM heartbeat_triage${where} ORDER BY ts DESC LIMIT ? OFFSET ?`
+    ).all(...params, limit, offset) as any[];
     const entries = rows.map(r => ({
       ts: r.ts, job: r.job, mode: r.mode, acted: !!r.acted,
       reason: r.reason, prompt: r.prompt, durationMs: r.duration_ms,

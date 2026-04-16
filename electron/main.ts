@@ -51,10 +51,13 @@ let setupWindow: BrowserWindow | null = null;
 let unlockWindow: BrowserWindow | null = null;
 let booting = true;
 
+const APP_ICON = path.join(__dirname, "assets", process.platform === "win32" ? "icon.ico" : "icon.png");
+
 function windowOpts(width: number, height: number): Electron.BrowserWindowConstructorOptions {
   return {
     width,
     height,
+    icon: APP_ICON,
     resizable: false,
     autoHideMenuBar: true,
     webPreferences: {
@@ -312,6 +315,7 @@ async function boot() {
     width: 1280,
     height: 860,
     title: "Bastion",
+    icon: APP_ICON,
     autoHideMenuBar: true,
     webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false },
   });

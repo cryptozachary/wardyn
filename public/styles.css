@@ -52,7 +52,7 @@ body {
 .navbar-brand {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   font-family: var(--mono);
   font-size: 15px;
   font-weight: 700;
@@ -60,6 +60,11 @@ body {
   letter-spacing: 0.5px;
   text-decoration: none;
   flex-shrink: 0;
+}
+.navbar-brand .brand-logo {
+  height: 22px;
+  width: auto;
+  object-fit: contain;
 }
 .brand-prefix {
   color: var(--accent);

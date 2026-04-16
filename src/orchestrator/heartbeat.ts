@@ -331,7 +331,7 @@ async function executeFixedJob(
       reason: "fixed schedule",
       prompt: job.prompt,
       durationMs: Date.now() - startMs,
-      result: result?.final?.slice(0, 500) ?? null,
+      result: result?.final?.slice(0, 5000) ?? null,
       error,
     });
   }
@@ -393,9 +393,9 @@ async function executeSmartJob(
       mode: "smart",
       acted: true,
       reason: triage.reason,
-      prompt: triage.prompt.slice(0, 500),
+      prompt: triage.prompt.slice(0, 5000),
       durationMs: Date.now() - startMs,
-      result: result?.final?.slice(0, 500) ?? null,
+      result: result?.final?.slice(0, 5000) ?? null,
       error,
     });
   }

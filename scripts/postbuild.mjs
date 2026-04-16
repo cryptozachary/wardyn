@@ -24,3 +24,9 @@ await copyAssets(
   path.join(REPO, "dist", "electron"),
   [".html", ".cjs"],
 );
+
+await copyAssets(
+  path.join(REPO, "electron", "assets"),
+  path.join(REPO, "dist", "electron", "assets"),
+  [".ico", ".png"],
+);

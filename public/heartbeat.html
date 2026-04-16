@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <title>Bastion — Heartbeat</title>
+  <link rel="icon" type="image/png" href="/ui/assets/favicon.png" />
   <link rel="stylesheet" href="/ui/styles.css" />
   <style>
     .job-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px 20px; margin-bottom: 10px; transition: border-color 0.2s; }
@@ -48,12 +49,57 @@
     .toggle .slider::before { content: ''; position: absolute; height: 14px; width: 14px; left: 3px; bottom: 3px; background: #94a3b8; border-radius: 50%; transition: 0.2s; }
     .toggle input:checked + .slider { background: var(--accent); }
     .toggle input:checked + .slider::before { transform: translateX(16px); background: #fff; }
+
+    /* Toast panel for trigger results */
+    .toast-panel { position: fixed; bottom: 20px; right: 20px; width: 420px; max-width: 90vw; max-height: 60vh; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 32px rgba(0,0,0,0.5); z-index: 100; display: none; flex-direction: column; overflow: hidden; animation: toast-in 0.25s ease-out; }
+    .toast-panel.show { display: flex; }
+    .toast-panel.error { border-color: #7f1d1d; }
+    @keyframes toast-in { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+    .toast-header { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+    .toast-header .toast-title { font-size: 13px; font-weight: 600; color: var(--text); }
+    .toast-header .toast-meta { font-size: 11px; color: var(--text-muted); margin-left: auto; }
+    .toast-header .toast-close { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 16px; padding: 0 4px; line-height: 1; }
+    .toast-header .toast-close:hover { color: var(--text); }
+    .toast-body { padding: 12px 14px; overflow-y: auto; flex: 1; }
+    .toast-body pre { font-family: var(--mono); font-size: 12px; color: #cbd5e1; white-space: pre-wrap; word-break: break-word; line-height: 1.6; margin: 0; }
+    .toast-body .toast-error { color: #fca5a5; }
+    .toast-status { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .toast-status.ok { background: var(--success); box-shadow: 0 0 6px rgba(34,197,94,0.4); }
+    .toast-status.err { background: var(--danger); box-shadow: 0 0 6px rgba(239,68,68,0.4); }
+    .toast-status.running { background: var(--accent); animation: pulse-dot 1.2s infinite; }
+    @keyframes pulse-dot { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+    /* Recent runs panel */
+    .runs-section { margin-top: 24px; }
+    .runs-section h2 { font-size: 14px; font-weight: 600; color: #94a3b8; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.3px; }
+    .runs-filter { display: flex; gap: 8px; margin-bottom: 12px; align-items: center; }
+    .runs-filter select { padding: 5px 10px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 12px; }
+    .run-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; overflow: hidden; transition: border-color 0.2s; }
+    .run-card:hover { border-color: #334155; }
+    .run-card.acted { border-left: 3px solid var(--success); }
+    .run-card.skipped { border-left: 3px solid var(--text-dim); }
+    .run-card.errored { border-left: 3px solid var(--danger); }
+    .run-summary { display: flex; align-items: center; gap: 10px; padding: 10px 14px; cursor: pointer; user-select: none; }
+    .run-summary:hover { background: rgba(30,41,59,0.3); }
+    .run-job { font-size: 13px; font-weight: 600; color: var(--text); min-width: 120px; }
+    .run-reason { font-size: 12px; color: #94a3b8; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .run-time { font-size: 11px; color: var(--text-muted); font-family: var(--mono); }
+    .run-dur { font-size: 11px; color: var(--text-dim); font-family: var(--mono); min-width: 50px; text-align: right; }
+    .run-arrow { color: var(--text-dim); font-size: 12px; transition: transform 0.2s; }
+    .run-card.open .run-arrow { transform: rotate(90deg); }
+    .run-detail { display: none; padding: 0 14px 12px; border-top: 1px solid var(--border); }
+    .run-card.open .run-detail { display: block; padding-top: 10px; }
+    .run-detail-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.3px; margin-bottom: 4px; font-weight: 600; }
+    .run-detail-text { font-family: var(--mono); font-size: 12px; color: #cbd5e1; white-space: pre-wrap; word-break: break-word; line-height: 1.5; margin-bottom: 10px; background: var(--bg); padding: 8px 10px; border-radius: 6px; max-height: 300px; overflow-y: auto; }
+    .run-detail-text.error-text { color: #fca5a5; }
+    .run-prompt-text { font-family: var(--mono); font-size: 12px; color: #94a3b8; white-space: pre-wrap; word-break: break-word; line-height: 1.5; margin-bottom: 10px; background: var(--bg); padding: 8px 10px; border-radius: 6px; max-height: 150px; overflow-y: auto; }
+    .runs-pagination { display: flex; gap: 8px; justify-content: center; margin-top: 10px; }
   </style>
 </head>
 <body>
   <nav class="navbar">
     <a class="navbar-brand" href="/ui/hub.html">
-      <span class="brand-prefix">&gt;</span>bastion
+      <img src="/ui/assets/logo-icon.png" alt="" class="brand-logo" />bastion
     </a>
     <div class="nav-links">
       <a class="nav-link" href="/ui/hub.html">Hub</a>
@@ -79,12 +125,45 @@
 
     <div id="jobs-list"></div>
 
+    <!-- Recent Runs Panel -->
+    <div class="runs-section">
+      <h2>Recent Runs</h2>
+      <div class="runs-filter">
+        <select id="runs-job-filter" onchange="loadRuns()">
+          <option value="">All jobs</option>
+        </select>
+        <select id="runs-status-filter" onchange="loadRuns()">
+          <option value="">All statuses</option>
+          <option value="acted">Acted</option>
+          <option value="skipped">Skipped</option>
+          <option value="error">Errors</option>
+        </select>
+        <div class="spacer"></div>
+        <span id="runs-count" style="font-size:11px;color:var(--text-dim)"></span>
+      </div>
+      <div id="runs-list"></div>
+      <div class="runs-pagination" id="runs-pagination"></div>
+    </div>
+
     <div class="triage-section">
       <h2>Recent Triage Log</h2>
       <table class="triage-table">
         <thead><tr><th>Time</th><th>Job</th><th>Mode</th><th>Acted</th><th>Reason</th><th>Duration</th></tr></thead>
         <tbody id="triage-body"></tbody>
       </table>
+    </div>
+  </div>
+
+  <!-- Toast panel for trigger results -->
+  <div class="toast-panel" id="toast-panel">
+    <div class="toast-header">
+      <span class="toast-status" id="toast-status"></span>
+      <span class="toast-title" id="toast-title">Triggering job...</span>
+      <span class="toast-meta" id="toast-meta"></span>
+      <button class="toast-close" onclick="closeToast()">&times;</button>
+    </div>
+    <div class="toast-body">
+      <pre id="toast-body-text"></pre>
     </div>
   </div>
 
@@ -208,15 +287,63 @@
     }
 
     async function triggerJob(name) {
-      showMsg(`Triggering "${name}"...`, true);
+      showToast(name, 'running', 'Running...', null);
+      const startMs = Date.now();
       try {
         const r = await fetch(`/api/heartbeat/jobs/${encodeURIComponent(name)}/trigger`, {
           method: 'POST', headers: headers()
         });
         const d = await r.json();
-        if (d.ok) showMsg(`"${name}" triggered — ${d.result || '(no output)'}`, true);
-        else showMsg(d.error, false);
-      } catch (e) { showMsg('Trigger failed: ' + e.message, false); }
+        const elapsed = ((Date.now() - startMs) / 1000).toFixed(1) + 's';
+        if (d.ok) {
+          showToast(name, 'ok', d.result || '(no output)', elapsed);
+          loadRuns();
+        } else {
+          showToast(name, 'err', d.error || 'Unknown error', elapsed);
+        }
+      } catch (e) {
+        const elapsed = ((Date.now() - startMs) / 1000).toFixed(1) + 's';
+        showToast(name, 'err', 'Trigger failed: ' + e.message, elapsed);
+      }
+    }
+
+    /* ─── Toast ─── */
+    function showToast(jobName, status, text, elapsed) {
+      const panel = document.getElementById('toast-panel');
+      const statusEl = document.getElementById('toast-status');
+      const titleEl = document.getElementById('toast-title');
+      const metaEl = document.getElementById('toast-meta');
+      const bodyEl = document.getElementById('toast-body-text');
+
+      statusEl.className = 'toast-status ' + status;
+      panel.classList.toggle('error', status === 'err');
+
+      if (status === 'running') {
+        titleEl.textContent = `Triggering "${jobName}"...`;
+        metaEl.textContent = '';
+        bodyEl.textContent = 'Waiting for result...';
+        bodyEl.className = '';
+      } else {
+        titleEl.textContent = jobName;
+        metaEl.textContent = elapsed || '';
+        bodyEl.textContent = text;
+        bodyEl.className = status === 'err' ? 'toast-error' : '';
+      }
+
+      panel.classList.add('show');
+      panel.style.animation = 'none';
+      panel.offsetHeight; // reflow
+      panel.style.animation = '';
+
+      // Auto-dismiss success after 15s, keep errors visible
+      clearTimeout(panel._autoClose);
+      if (status === 'ok') {
+        panel._autoClose = setTimeout(() => closeToast(), 15000);
+      }
+    }
+
+    function closeToast() {
+      document.getElementById('toast-panel').classList.remove('show');
     }
 
     async function deleteJob(name) {
@@ -288,6 +415,101 @@
       }
     }
 
+    /* ─── Recent Runs ─── */
+    let runsPage = 0;
+    const RUNS_PER_PAGE = 15;
+
+    async function loadRuns() {
+      runsPage = 0;
+      await fetchRuns();
+    }
+
+    async function fetchRuns() {
+      const jobFilter = document.getElementById('runs-job-filter').value;
+      const statusFilter = document.getElementById('runs-status-filter').value;
+      const limit = RUNS_PER_PAGE;
+      const offset = runsPage * RUNS_PER_PAGE;
+
+      try {
+        let url = `/api/heartbeat/triage-log?limit=${limit + 1}&offset=${offset}`;
+        if (jobFilter) url += `&job=${encodeURIComponent(jobFilter)}`;
+        if (statusFilter) url += `&status=${encodeURIComponent(statusFilter)}`;
+        const r = await fetch(url, { headers: headers(false) });
+        const d = await r.json();
+        const entries = d.entries || [];
+        const hasMore = entries.length > limit;
+        const display = entries.slice(0, limit);
+
+        document.getElementById('runs-count').textContent = `${d.total || 0} total runs`;
+        renderRuns(display);
+        renderRunsPagination(hasMore);
+      } catch {
+        document.getElementById('runs-list').innerHTML = '<div class="empty-state"><p>Failed to load runs</p></div>';
+      }
+    }
+
+    function renderRuns(entries) {
+      const el = document.getElementById('runs-list');
+      if (!entries.length) {
+        el.innerHTML = '<div class="empty-state"><p>No runs recorded yet</p></div>';
+        return;
+      }
+      el.innerHTML = entries.map((e, i) => {
+        const cls = e.error ? 'errored' : (e.acted ? 'acted' : 'skipped');
+        const dur = e.durationMs ? (e.durationMs / 1000).toFixed(1) + 's' : '-';
+        const time = timeAgo(e.ts);
+        const statusBadge = e.error
+          ? '<span class="badge" style="background:#7f1d1d;color:#fca5a5">error</span>'
+          : (e.acted
+            ? '<span class="badge enabled">acted</span>'
+            : '<span class="badge disabled-badge">skipped</span>');
+        return `
+          <div class="run-card ${cls}" id="run-${i}">
+            <div class="run-summary" onclick="document.getElementById('run-${i}').classList.toggle('open')">
+              <span class="run-arrow">&#9654;</span>
+              <span class="run-job">${esc(e.job)}</span>
+              ${statusBadge}
+              <span class="badge ${e.mode}">${e.mode}</span>
+              <span class="run-reason" title="${esc(e.reason)}">${esc(e.reason)}</span>
+              <span class="run-dur">${dur}</span>
+              <span class="run-time" title="${new Date(e.ts).toLocaleString()}">${time}</span>
+            </div>
+            <div class="run-detail">
+              ${e.prompt ? `<div class="run-detail-label">Prompt</div><div class="run-prompt-text">${esc(e.prompt)}</div>` : ''}
+              ${e.result ? `<div class="run-detail-label">Result</div><div class="run-detail-text">${esc(e.result)}</div>` : ''}
+              ${e.error ? `<div class="run-detail-label">Error</div><div class="run-detail-text error-text">${esc(e.error)}</div>` : ''}
+              ${!e.result && !e.error ? '<div style="font-size:12px;color:var(--text-dim);padding:4px 0">No output recorded</div>' : ''}
+            </div>
+          </div>`;
+      }).join('');
+    }
+
+    function renderRunsPagination(hasMore) {
+      const el = document.getElementById('runs-pagination');
+      const btns = [];
+      if (runsPage > 0) btns.push(`<button class="btn btn-secondary btn-sm" onclick="runsPage--;fetchRuns()">&laquo; Newer</button>`);
+      if (hasMore) btns.push(`<button class="btn btn-secondary btn-sm" onclick="runsPage++;fetchRuns()">Older &raquo;</button>`);
+      el.innerHTML = btns.join('');
+    }
+
+    function timeAgo(ts) {
+      const diff = Date.now() - ts;
+      if (diff < 60000) return 'just now';
+      if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
+      if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
+      return Math.floor(diff / 86400000) + 'd ago';
+    }
+
+    function populateJobFilter() {
+      const sel = document.getElementById('runs-job-filter');
+      const existing = sel.value;
+      const opts = ['<option value="">All jobs</option>'];
+      for (const j of allJobs) {
+        opts.push(`<option value="${esc(j.name)}" ${j.name === existing ? 'selected' : ''}>${esc(j.name)}</option>`);
+      }
+      sel.innerHTML = opts.join('');
+    }
+
     /* ─── Triage log ─── */
     async function loadTriage() {
       try {
@@ -312,8 +534,13 @@
     }
 
     /* ─── Init ─── */
-    loadJobs();
-    loadTriage();
+    async function init() {
+      await loadJobs();
+      populateJobFilter();
+      loadRuns();
+      loadTriage();
+    }
+    init();
 
     // Close modal on overlay click
     document.getElementById('modal').addEventListener('click', e => {
