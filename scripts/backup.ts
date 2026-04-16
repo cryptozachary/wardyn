@@ -87,7 +87,7 @@ async function main() {
   const destIdx = args.indexOf("--dest");
   const destRoot = destIdx >= 0 ? args[destIdx + 1] : DEFAULT_DEST;
 
-  const outDir = path.join(destRoot, `bastion-${timestamp()}`);
+  const outDir = path.join(destRoot, `wardyn-${timestamp()}`);
   await fs.mkdir(outDir, { recursive: true });
 
   console.log(`Backing up to ${outDir} ...`);

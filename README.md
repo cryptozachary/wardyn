@@ -1,6 +1,6 @@
-# Bastion
+# Wardyn
 
-Bastion is a self-hosted agent gateway exposing a WebSocket + REST control plane
+Wardyn is a self-hosted agent gateway exposing a WebSocket + REST control plane
 for an LLM-driven skill runtime. This README covers operations: how to boot it,
 what to configure, and how to keep it safe in production.
 
@@ -45,7 +45,7 @@ Two callers are supported:
 
 1. **Server-to-server**: send `x-api-token: $API_TOKEN`. Bypasses CSRF.
 2. **Browser**: POST the token to `/api/auth/login`. Server sets an
-   `HttpOnly; SameSite=Strict` session cookie and a `bastion_csrf` cookie.
+   `HttpOnly; SameSite=Strict` session cookie and a `wardyn_csrf` cookie.
    Mutating requests (POST/PUT/DELETE) must echo the CSRF cookie back as
    `x-csrf-token`. Logout is `POST /api/auth/logout`.
 
@@ -104,14 +104,14 @@ npm run store-key
 ## Deploy
 
 ```bash
-docker build -t bastion -f docker/sandbox.dockerfile .
-docker run -d --name bastion \
+docker build -t wardyn -f docker/sandbox.dockerfile .
+docker run -d --name wardyn \
   -e API_TOKEN=... -e KEY_PASSPHRASE=... -e COOKIE_SECRET=... -e NODE_ENV=production \
   -e ADMIN_PORT=3001 \
   -p 127.0.0.1:3000:3000 -p 127.0.0.1:3001:3001 \
-  -v /srv/bastion/data:/app/data \
-  -v /srv/bastion/config:/app/config \
-  bastion
+  -v /srv/wardyn/data:/app/data \
+  -v /srv/wardyn/config:/app/config \
+  wardyn
 ```
 
 ## Rollback
@@ -132,7 +132,7 @@ while the server is up unless `--force`.
 
 ## Desktop (Electron)
 
-Bastion can be run as an Electron desktop app. First-run bootstrap uses
+Wardyn can be run as an Electron desktop app. First-run bootstrap uses
 **Option C**: a vault passphrase held in the user's head, plus lower-value
 session tokens stored in the OS keychain (via Electron's `safeStorage`).
 

@@ -48,7 +48,7 @@ function validateCookieSession(cookieHeader: string | undefined): boolean {
   const secret = process.env.COOKIE_SECRET || process.env.API_TOKEN;
   if (!secret) return false;
   const cookies = parseCookies(cookieHeader);
-  const token = cookies["bastion_auth"];
+  const token = cookies["wardyn_auth"];
   if (!token) return false;
   const parts = token.split(".");
   if (parts.length !== 3) return false;
@@ -117,7 +117,7 @@ export function attachWebSocket(
 
       // Allow client to start a fresh session (clears shared history)
       if (data.type === "new_session") {
-        sessionId = data.sessionId || "default";
+        sessionId = randomUUID();
         sendJson(ws, { type: "session", sessionId });
         return;
       }

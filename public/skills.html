@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Bastion — Skills</title>
+  <title>Wardyn — Skills</title>
   <link rel="icon" type="image/png" href="/ui/assets/favicon.png" />
   <link rel="stylesheet" href="/ui/styles.css" />
   <style>
@@ -46,7 +46,7 @@
 <body>
   <nav class="navbar">
     <a class="navbar-brand" href="/ui/hub.html">
-      <img src="/ui/assets/logo-icon.png" alt="" class="brand-logo" />bastion
+      <img src="/ui/assets/logo-icon.png" alt="" class="brand-logo" />wardyn
     </a>
     <div class="nav-links">
       <a class="nav-link" href="/ui/hub.html">Hub</a>
@@ -152,10 +152,10 @@
 <script>
 const PROTECTED = new Set(['exec_skill', 'filesystem_skill', 'browser_skill', 'web_fetch_skill']);
 
-function getCsrf() { const m = document.cookie.match(/(?:^|;\s*)bastion_csrf=([^;]+)/); return m ? m[1] : ''; }
+function getCsrf() { const m = document.cookie.match(/(?:^|;\s*)wardyn_csrf=([^;]+)/); return m ? m[1] : ''; }
 function authHeaders() {
   const h = {};
-  const t = localStorage.getItem('bastion_api_token') || localStorage.getItem('secureclaw_api_token') || '';
+  const t = localStorage.getItem('wardyn_api_token') || localStorage.getItem('secureclaw_api_token') || '';
   if (t) h['x-api-token'] = t;
   const csrf = getCsrf();
   if (csrf) h['x-csrf-token'] = csrf;

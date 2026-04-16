@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Bastion — Setup</title>
+  <title>Wardyn — Setup</title>
   <style>
     :root { color-scheme: dark; }
     body { font-family: system-ui, sans-serif; margin: 0; padding: 28px; background: #111; color: #eee; }
@@ -21,7 +21,7 @@
 </head>
 <body>
   <div id="step-passphrase">
-    <h1>Welcome to Bastion</h1>
+    <h1>Welcome to Wardyn</h1>
     <p>Choose a vault passphrase. It encrypts your provider API keys and is <b>required every launch</b>. It is never stored on disk — if you forget it, the vault cannot be recovered.</p>
     <label>Passphrase (min 8 characters)</label>
     <input id="p1" type="password" autofocus />
@@ -29,14 +29,14 @@
     <input id="p2" type="password" />
     <div class="err" id="err"></div>
     <div class="row">
-      <button class="ghost" onclick="window.bastion.setupCancel()">Cancel</button>
+      <button class="ghost" onclick="window.wardyn.setupCancel()">Cancel</button>
       <button class="primary" id="go">Create vault</button>
     </div>
   </div>
 
   <div id="step-token" style="display:none">
     <h1>Save your API token</h1>
-    <p>This token grants full access to Bastion. Copy it now if you want to hit the API from scripts or external tools. You can regenerate it later from settings.</p>
+    <p>This token grants full access to Wardyn. Copy it now if you want to hit the API from scripts or external tools. You can regenerate it later from settings.</p>
     <div class="token-box" id="token"></div>
     <div class="row">
       <button class="primary" id="continue">Continue</button>
@@ -52,7 +52,7 @@
       err.textContent = "";
       if (p1.value.length < 8) { err.textContent = "Passphrase must be at least 8 characters."; return; }
       if (p1.value !== p2.value) { err.textContent = "Passphrases don't match."; return; }
-      const res = await window.bastion.setupSubmit({ passphrase: p1.value });
+      const res = await window.wardyn.setupSubmit({ passphrase: p1.value });
       if (!res.ok) { err.textContent = res.error || "Setup failed."; return; }
       document.getElementById("step-passphrase").style.display = "none";
       document.getElementById("step-token").style.display = "";
