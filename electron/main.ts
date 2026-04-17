@@ -210,8 +210,14 @@ async function injectCookies(setCookies: string[]): Promise<void> {
 }
 
 function resolveNodeBinary(): string {
-  // Electron's process.execPath is electron.exe — wrong ABI for native modules
-  // like isolated-vm. Spawn the gateway with the system Node runtime instead.
+  // Prefer the bundled Node binary shipped alongside the app.
+  const ext = process.platform === "win32" ? "node.exe" : "node";
+  const bundled = app.isPackaged
+    ? path.join(process.resourcesPath, "node-runtime", ext)
+    : path.join(__dirname, "node-runtime", ext);
+  if (existsSync(bundled)) return bundled;
+
+  // Fallback: system Node on PATH (dev mode convenience).
   const which = process.platform === "win32" ? "where" : "which";
   const r = spawnSync(which, ["node"], { encoding: "utf8" });
   if (r.status === 0) {
@@ -219,7 +225,7 @@ function resolveNodeBinary(): string {
     if (first && existsSync(first)) return first;
   }
   throw new Error(
-    "Could not locate system `node` on PATH. Install Node.js (same major version as this app was built against) and retry.",
+    "Could not locate Node.js. The bundled runtime is missing and no system `node` was found on PATH.",
   );
 }
 
@@ -286,6 +292,10 @@ async function boot() {
     cookieSecret = bootstrap.cookieSecret;
   }
 
+  const APP_ROOT = app.isPackaged
+    ? path.join(process.resourcesPath, "app")
+    : path.resolve(process.cwd());
+
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     NODE_ENV: "production",
@@ -295,6 +305,7 @@ async function boot() {
     COOKIE_SECRET: cookieSecret,
     KEY_PASSPHRASE: passphrase,
     DATA_DIR,
+    APP_ROOT,
   };
   if (await probePort(HOST, PORT)) {
     throw new Error(

@@ -60,3 +60,9 @@ coverage/
 
 # Backups (contain encrypted vault and skill secrets)
 backups/
+
+# Bundled Node runtime (downloaded by scripts/fetch-node.mjs)
+electron/node-runtime/
+
+# Electron packager output
+release/

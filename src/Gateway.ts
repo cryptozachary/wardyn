@@ -52,6 +52,7 @@ dotenv.config();
 
 assertProdAuthConfig();
 
+const APP_ROOT = process.env.APP_ROOT || process.cwd();
 const BOOT_START = Date.now();
 
 // Initialize SQLite database (creates tables on first run)
@@ -140,7 +141,7 @@ app.use((req, res, next) => {
 });
 
 // --- Auth routes (must precede gated routes) ---
-app.get("/login", (_req, res) => res.sendFile(path.join(process.cwd(), "public", "login.html")));
+app.get("/login", (_req, res) => res.sendFile(path.join(APP_ROOT, "public", "login.html")));
 // Login is pre-CSRF because it is how a session is first established.
 app.post("/api/auth/login", rateLimit, (req, res) => {
   const { token } = req.body || {};
@@ -165,9 +166,9 @@ app.post("/api/auth/logout", (_req, res) => {
 });
 
 // Serve static UI with path traversal protection (auth-gated)
-app.use("/ui", authForBrowser, ...safeStatic(path.join(process.cwd(), "public")));
-app.get("/chat", authForBrowser, (_req, res) => res.sendFile(path.join(process.cwd(), "public", "chat.html")));
-app.get("/canvas", authForBrowser, (_req, res) => res.sendFile(path.join(process.cwd(), "public", "canvas.html")));
+app.use("/ui", authForBrowser, ...safeStatic(path.join(APP_ROOT, "public")));
+app.get("/chat", authForBrowser, (_req, res) => res.sendFile(path.join(APP_ROOT, "public", "chat.html")));
+app.get("/canvas", authForBrowser, (_req, res) => res.sendFile(path.join(APP_ROOT, "public", "canvas.html")));
 
 // Serve skill output files with path traversal protection (auth-gated)
 app.use("/output", authForBrowser, ...safeStatic(path.join(process.cwd(), "output")));
@@ -935,7 +936,7 @@ app.post("/api/backup", requireAuth, async (req, res) => {
   const includeLogs = !!req.body?.includeLogs;
   try {
     const { spawn } = await import("child_process");
-    const scriptPath = path.resolve(process.cwd(), "dist/scripts/backup.js");
+    const scriptPath = path.resolve(APP_ROOT, "dist/scripts/backup.js");
     const args = [scriptPath];
     if (includeLogs) args.push("--include-logs");
     const child = spawn(process.execPath, args, { cwd: process.cwd() });
