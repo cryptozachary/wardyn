@@ -16,7 +16,17 @@
 
 import assert from "assert";
 import http from "http";
+import os from "os";
+import path from "path";
+import { mkdtempSync } from "fs";
 import { createHmac, generateKeyPairSync, sign as edSign } from "crypto";
+
+// Isolate DB state to a throwaway temp folder so `npm test` never writes to
+// the production `data/secureclaw.db`. Must run before any import that opens
+// the DB (e.g. dynamic import of rateLimit below).
+process.env.DATA_DIR = mkdtempSync(path.join(os.tmpdir(), "wardyn-integration-"));
+process.env.NODE_ENV = "test";
+
 import { issueSessionCookie } from "../src/security/auth.js";
 
 let passed = 0;
@@ -242,7 +252,6 @@ async function run() {
   section("rate limiter");
 
   await test("SQLite rate limiter blocks beyond window", async () => {
-    process.env.DATA_DIR = process.cwd(); // ensure data dir is usable
     const { checkRateLimit } = await import("../src/security/rateLimit.js");
     const key = "rl-test-" + Date.now();
     for (let i = 0; i < 3; i++) assert.strictEqual(checkRateLimit("test", key, 60_000, 3), true);

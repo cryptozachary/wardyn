@@ -345,6 +345,9 @@ async function boot() {
   const APP_ROOT = app.isPackaged
     ? path.join(process.resourcesPath, "app")
     : path.resolve(process.cwd());
+  const SKILLS_ROOT = app.isPackaged
+    ? path.join(process.resourcesPath, "skills")
+    : path.join(process.cwd(), "skills");
 
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -356,6 +359,7 @@ async function boot() {
     KEY_PASSPHRASE: passphrase,
     DATA_DIR,
     APP_ROOT,
+    SKILLS_ROOT,
   };
   if (await probePort(HOST, PORT)) {
     throw new Error(

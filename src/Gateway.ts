@@ -172,8 +172,12 @@ app.use("/ui", authForBrowser, ...safeStatic(path.join(APP_ROOT, "public")));
 app.get("/chat", authForBrowser, (_req, res) => res.sendFile(path.join(APP_ROOT, "public", "chat.html")));
 app.get("/canvas", authForBrowser, (_req, res) => res.sendFile(path.join(APP_ROOT, "public", "canvas.html")));
 
-// Serve skill output files with path traversal protection (auth-gated)
-app.use("/output", authForBrowser, ...safeStatic(path.join(process.cwd(), "output")));
+// Serve skill output files with path traversal protection (auth-gated).
+// mkdir first so safeStatic's realpathSync doesn't throw on a fresh install
+// where the user-writable DATA_DIR hasn't been populated yet.
+const OUTPUT_DIR = path.join(process.cwd(), "output");
+fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+app.use("/output", authForBrowser, ...safeStatic(OUTPUT_DIR));
 function normalizeTelegram(body: any): Message {
   return { id: String(body.update_id ?? Date.now()), channel: "telegram", userId: String(body.message?.from?.id ?? "unknown"), text: body.message?.text ?? "", ts: Date.now() };
 }

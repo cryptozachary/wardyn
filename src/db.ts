@@ -12,17 +12,26 @@ import Database from "better-sqlite3";
 import path from "path";
 import { mkdirSync } from "fs";
 
-const DATA_DIR = path.join(process.cwd(), "data");
-const DB_PATH = path.join(DATA_DIR, "secureclaw.db");
+/**
+ * Resolve where the SQLite DB lives. Honors `process.env.DATA_DIR` so that
+ * test suites (and Electron packaging) can redirect to a tmp / user-data path
+ * without touching production data. Evaluated at first getDb() call, not at
+ * module import, so tests can set the env var *after* importing this module.
+ */
+function resolveDbPath(): { dir: string; file: string } {
+  const dir = process.env.DATA_DIR || path.join(process.cwd(), "data");
+  return { dir, file: path.join(dir, "secureclaw.db") };
+}
 
 let _db: Database.Database | null = null;
 
 export function getDb(): Database.Database {
   if (_db) return _db;
 
-  mkdirSync(DATA_DIR, { recursive: true });
+  const { dir, file } = resolveDbPath();
+  mkdirSync(dir, { recursive: true });
 
-  _db = new Database(DB_PATH);
+  _db = new Database(file);
 
   // Performance & safety pragmas
   _db.pragma("journal_mode = WAL");

@@ -97,6 +97,24 @@ function getPrices(): Record<string, PriceRow> {
  * For models with a long-context tier (e.g. gpt-5.4), prompts over `longThreshold`
  * tokens use the `long*` rates.
  */
+/**
+ * Resolve a model name to a price row, tolerant to provider-stamped snapshot
+ * suffixes like `-YYYY-MM-DD` (OpenAI, e.g. `gpt-5.4-2026-03-05`) or the older
+ * Anthropic `-YYYYMMDD` format (e.g. `claude-sonnet-4-20250514`).
+ *
+ * Exact match wins so users can still pin a specific snapshot in
+ * `config/llm-pricing.json` if a dated build is ever priced differently.
+ */
+function resolvePrice(model: string): PriceRow | undefined {
+  const prices = getPrices();
+  if (prices[model]) return prices[model];
+  const stripped = model
+    .replace(/-\d{4}-\d{2}-\d{2}$/, "")   // OpenAI snapshot: -2026-03-05
+    .replace(/-\d{8}$/, "");               // Anthropic legacy: -20250514
+  if (stripped !== model && prices[stripped]) return prices[stripped];
+  return undefined;
+}
+
 export function estimateCost(
   model: string | undefined,
   inTokens: number,
@@ -105,8 +123,7 @@ export function estimateCost(
   cacheWriteTokens = 0,
 ): number | undefined {
   if (!model) return undefined;
-  const prices = getPrices();
-  const row = prices[model];
+  const row = resolvePrice(model);
   if (!row) return undefined;
 
   const isLong = row.longThreshold != null && inTokens > row.longThreshold;

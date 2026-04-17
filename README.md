@@ -198,6 +198,30 @@ unexpected exit with exponential backoff (500 ms → 10 s), capped at 5 restarts
 per 60 s window. If the cap is hit the app surfaces a fatal error rather than
 silently crash-looping.
 
+The child is spawned with `SKILLS_ROOT` and `APP_ROOT` env vars set to the
+packaged `resources/` tree. `process.cwd()` in the child points at `DATA_DIR`
+(user-writable state), so any code that needs to read shipped resources must
+resolve paths via those env vars rather than `process.cwd()`.
+
+### Packaging the installer
+
+```bash
+npm run pack    # builds to release/win-unpacked/ — no installer, fast iteration
+npm run dist    # builds the full platform installer into release/
+```
+
+Both targets run `scripts/fetch-node.mjs`, which downloads a portable Node
+runtime into `electron/node-runtime/` and ships it as an extraResource. The
+script defaults to `process.version`, so the bundled runtime always matches
+the Node that compiled the native modules (`better-sqlite3`) during
+`npm install` — avoiding `NODE_MODULE_VERSION` ABI mismatches at runtime.
+Delete `electron/node-runtime/` to force a re-fetch when changing Node
+versions.
+
+Because `build.npmRebuild` is `false` and electron-builder prunes
+`devDependencies`, anything imported at runtime (e.g. `typescript` via the
+AST analyzer) must live in `dependencies`, not `devDependencies`.
+
 ## Production readiness
 
 Features that matter for single-operator production use:

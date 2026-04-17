@@ -19,7 +19,10 @@ function arg(name, fallback) {
   return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : fallback;
 }
 
-const NODE_VERSION = arg("version", "22.15.0");
+// Default to the Node version currently running this script. That way the
+// bundled runtime matches whatever Node compiled better-sqlite3 during
+// `npm install`, so we never ship an ABI-mismatched native module.
+const NODE_VERSION = arg("version", process.version.replace(/^v/, ""));
 const PLATFORM = arg("platform", process.platform);
 const ARCH = arg("arch", process.arch);
 

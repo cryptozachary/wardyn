@@ -15,9 +15,9 @@ import { mkdtempSync, rmSync } from "fs";
 import os from "os";
 import path from "path";
 
-// Isolate SQLite data dir to a throwaway temp folder for each test run. Every
-// module that touches the DB reads DATA_DIR from env on first import, so this
-// must be set BEFORE the first dynamic import below.
+// Isolate SQLite data dir to a throwaway temp folder for each test run.
+// getDb() in src/db.ts reads DATA_DIR from env on its first call, so this
+// must be set BEFORE any import that would open the DB.
 const TMP = mkdtempSync(path.join(os.tmpdir(), "wardyn-readiness-"));
 process.env.DATA_DIR = TMP;
 process.env.NODE_ENV = "test";
@@ -194,6 +194,17 @@ async function run() {
     // 200k uncached = $1.00; 0 cached; 10k out = $0.225 → $1.225
     const c = usage.estimateCost("gpt-5.4", 200_000, 10_000, 0, 0);
     assert.ok(typeof c === "number" && Math.abs(c - 1.225) < 0.001, `got ${c}`);
+  });
+
+  await test("estimateCost strips snapshot date suffix to match base model", () => {
+    // OpenAI returns dated snapshots like gpt-5.4-2026-03-05 — must price as gpt-5.4.
+    const a = usage.estimateCost("gpt-5.4-2026-03-05", 10_000, 1_000);
+    const b = usage.estimateCost("gpt-5.4",             10_000, 1_000);
+    assert.ok(typeof a === "number" && a === b, `snapshot ${a} vs base ${b}`);
+    // Old Anthropic -YYYYMMDD format also resolves to the base model name.
+    const c = usage.estimateCost("claude-sonnet-4-6-20260101", 10_000, 1_000);
+    const d = usage.estimateCost("claude-sonnet-4-6",            10_000, 1_000);
+    assert.ok(typeof c === "number" && c === d, `anthropic snapshot ${c} vs base ${d}`);
   });
 
   await test("estimateCost handles Anthropic cache writes", () => {

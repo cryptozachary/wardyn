@@ -6,6 +6,12 @@ import type { SkillMeta } from "../types.js";
 const require = createRequire(import.meta.url);
 
 function resolveSkillsRoot() {
+  // Packaged Electron sets SKILLS_ROOT to the extraResources path because
+  // process.cwd() points at DATA_DIR (user-writable state), not at the
+  // read-only resource tree that ships with the installer.
+  if (process.env.SKILLS_ROOT && existsSync(process.env.SKILLS_ROOT)) {
+    return process.env.SKILLS_ROOT;
+  }
   const distSkills = path.join(process.cwd(), "dist", "skills");
   return existsSync(distSkills) ? distSkills : path.join(process.cwd(), "skills");
 }
