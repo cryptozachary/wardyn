@@ -25,6 +25,7 @@ import { exportSkill, importSkill, importFromUrl, listPackages, getPackage, dele
 import { getMaskedSecrets, setSkillSecret, deleteSkillSecret, initSkillSecrets, migrateLegacySecrets } from "./security/skillSecrets.js";
 import { getPublicKey, ensureKeypair } from "./security/skillSigning.js";
 import { getLoopGuardStats } from "./security/loopGuard.js";
+import { listSettings, setSetting, deleteSetting, getSettingNumber, SETTING_DEFS } from "./security/settingsStore.js";
 import { ZeroizingCache } from "./security/zeroize.js";
 import { safeStatic } from "./security/pathGuard.js";
 import { getAllQuotas, getQuotaStatus } from "./security/quotaTracker.js";
@@ -815,6 +816,59 @@ app.get("/api/security/llm-usage", requireAuth, (req, res) => {
   res.json({ ok: true, ...getUsageSummary(hours), budgetExceeded: isBudgetExceeded() });
 });
 
+// ─────────── Runtime-editable settings ───────────
+// Boot-only env vars (must restart to change). Listed here so the UI can
+// show them read-only without leaking secret values.
+const BOOT_ONLY_ENV_KEYS = [
+  "NODE_ENV", "PORT", "HOST", "ADMIN_PORT", "ADMIN_HOST",
+  "TRUST_PROXY", "BODY_LIMIT", "RATE_LIMIT", "WS_RATE_LIMIT",
+  "LOG_LEVEL", "WARDYN_AUTOUPDATE", "WARDYN_UPDATE_URL", "DATA_DIR",
+] as const;
+const SECRET_ENV_KEYS = ["API_TOKEN", "KEY_PASSPHRASE", "COOKIE_SECRET"] as const;
+
+app.get("/api/settings", requireAuth, (_req, res) => {
+  const bootOnly = BOOT_ONLY_ENV_KEYS.map(k => ({
+    key: k,
+    value: process.env[k] ?? null,
+    source: process.env[k] != null && process.env[k] !== "" ? "env" : "default",
+  }));
+  const secrets = SECRET_ENV_KEYS.map(k => {
+    const v = process.env[k];
+    return { key: k, set: !!v, length: v ? v.length : 0 };
+  });
+  res.json({ ok: true, runtime: listSettings(), bootOnly, secrets });
+});
+
+app.post("/api/settings", requireAuth, requireCsrf, (req, res) => {
+  const { key, value } = req.body || {};
+  if (typeof key !== "string" || !SETTING_DEFS.some(d => d.key === key)) {
+    return res.status(400).json({ ok: false, error: "unknown or non-editable setting" });
+  }
+  try {
+    if (value === null || value === "" || value === undefined) {
+      deleteSetting(key);
+    } else {
+      setSetting(key, String(value));
+    }
+    res.json({ ok: true, settings: listSettings() });
+  } catch (err: any) {
+    res.status(400).json({ ok: false, error: err.message || String(err) });
+  }
+});
+
+app.delete("/api/settings/:key", requireAuth, requireCsrf, (req, res) => {
+  const key = req.params.key;
+  if (!SETTING_DEFS.some(d => d.key === key)) {
+    return res.status(400).json({ ok: false, error: "unknown setting" });
+  }
+  try {
+    deleteSetting(key);
+    res.json({ ok: true, settings: listSettings() });
+  } catch (err: any) {
+    res.status(400).json({ ok: false, error: err.message || String(err) });
+  }
+});
+
 app.get("/api/heartbeat/triage-log", requireAuth, (req, res) => {
   const limit = Math.min(Number(req.query.limit) || 50, 200);
   const offset = Number(req.query.offset) || 0;
@@ -1111,14 +1165,15 @@ ensureKeypair();
 setInterval(() => cleanExpiredSessions(), 3_600_000).unref();
 setInterval(() => cleanExpiredUploads(), 3_600_000).unref();
 
-// Prune audit log + canvas items on the same cadence. Retention is configurable
-// via env; defaults preserve 90 days of audit trail and 7 days of canvas items.
-const AUDIT_RETENTION_DAYS = Number(process.env.AUDIT_RETENTION_DAYS) || 90;
-const CANVAS_RETENTION_DAYS = Number(process.env.CANVAS_RETENTION_DAYS) || 7;
-const CANVAS_MAX_ITEMS = Number(process.env.CANVAS_MAX_ITEMS) || 5000;
+// Prune audit log + canvas items on the same cadence. Retention is read
+// through the settings store each tick so UI edits take effect without a
+// restart; defaults preserve 90 days of audit trail and 7 days of canvas.
 setInterval(() => {
-  try { auditLogger.pruneOlderThan(AUDIT_RETENTION_DAYS); } catch {}
-  try { pruneCanvas(CANVAS_RETENTION_DAYS, CANVAS_MAX_ITEMS); } catch {}
+  const auditDays    = getSettingNumber("AUDIT_RETENTION_DAYS")  ?? 90;
+  const canvasDays   = getSettingNumber("CANVAS_RETENTION_DAYS") ?? 7;
+  const canvasMax    = getSettingNumber("CANVAS_MAX_ITEMS")      ?? 5000;
+  try { auditLogger.pruneOlderThan(auditDays); } catch {}
+  try { pruneCanvas(canvasDays, canvasMax); } catch {}
 }, 6 * 3_600_000).unref();
 
 server.listen(PORT, HOST, () => {

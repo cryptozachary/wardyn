@@ -10,6 +10,7 @@
 import { existsSync, readFileSync } from "fs";
 import path from "path";
 import { getDb } from "../db.js";
+import { getSettingNumber } from "../security/settingsStore.js";
 
 export interface UsageRecord {
   ts: number;
@@ -130,8 +131,10 @@ export function getUsageSummary(hours = 24): UsageSummary {
  * would exceed the limit — the caller should refuse the request.
  */
 export function isBudgetExceeded(): boolean {
-  const daily = Number(process.env.LLM_DAILY_BUDGET_USD);
-  if (!Number.isFinite(daily) || daily <= 0) return false;
+  // Read through the settings store so a live UI override takes effect
+  // immediately. The store falls back to process.env and then to no-cap.
+  const daily = getSettingNumber("LLM_DAILY_BUDGET_USD");
+  if (daily == null || !Number.isFinite(daily) || daily <= 0) return false;
   const db = getDb();
   const since = Date.now() - 24 * 3_600_000;
   const row = db.prepare("SELECT SUM(cost_usd) as c FROM llm_usage WHERE ts >= ?").get(since) as any;

@@ -121,6 +121,7 @@
       <a class="nav-link" href="/ui/heartbeat.html">Heartbeat</a>
       <a class="nav-link" href="/ui/approvals.html">Approvals</a>
       <a class="nav-link active" href="/ui/security.html">Security</a>
+      <a class="nav-link" href="/ui/settings.html">Settings</a>
       <a class="nav-link" href="/ui/setup.html">Setup</a>
     </div>
   </nav>
@@ -310,6 +311,47 @@
       </table>
     </section>
 
+    <!-- LLM Usage & Cost -->
+    <section>
+      <div class="events-header">
+        <h2>LLM Usage &amp; Cost</h2>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <span id="llmBudgetBadge" style="display:none; font-size:11px; font-weight:700; padding:3px 10px; border-radius:10px;"></span>
+          <select id="llmHours" style="background:#1e293b;color:#e2e8f0;border:1px solid #1e2d4a;border-radius:6px;padding:4px 8px;font-size:12px;">
+            <option value="1">Last 1h</option>
+            <option value="6">Last 6h</option>
+            <option value="24" selected>Last 24h</option>
+            <option value="168">Last 7d</option>
+          </select>
+        </div>
+      </div>
+      <div class="cards" style="grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));">
+        <div class="card"><div class="value" id="llmCalls">0</div><div class="label">Calls</div></div>
+        <div class="card"><div class="value" id="llmCost">$0.00</div><div class="label">Cost (est.)</div></div>
+        <div class="card"><div class="value" id="llmTokens">0</div><div class="label">Tokens</div></div>
+        <div class="card"><div class="value" id="llmLatency">0ms</div><div class="label">Avg Latency</div></div>
+      </div>
+      <div class="two-col" style="margin-top:12px;">
+        <div>
+          <h3 style="font-size:12px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px;">By Provider</h3>
+          <table class="audit-table">
+            <thead><tr><th>Provider</th><th>Calls</th><th>Tokens</th><th>Cost</th></tr></thead>
+            <tbody id="llmProviderTable"><tr><td colspan="4" style="color:#64748b;text-align:center;">loading…</td></tr></tbody>
+          </table>
+        </div>
+        <div>
+          <h3 style="font-size:12px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px;">By Model</h3>
+          <table class="audit-table">
+            <thead><tr><th>Model</th><th>Calls</th><th>Tokens</th><th>Cost</th></tr></thead>
+            <tbody id="llmModelTable"><tr><td colspan="4" style="color:#64748b;text-align:center;">loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+      <div style="font-size:11px; color:#64748b; margin-top:8px;">
+        Costs are estimates from the built-in price table. Override in <code>config/llm-pricing.json</code>. Budget lives in Settings.
+      </div>
+    </section>
+
     <!-- Pattern List -->
     <section>
       <h2>SafetySpine Patterns</h2>
@@ -352,7 +394,7 @@ document.querySelectorAll('.filter-btn').forEach(btn => {
 // --- Auto-refresh ---
 function startRefresh() {
   stopRefresh();
-  refreshTimer = setInterval(() => { loadStats(); loadEvents(); loadLoopGuard(); loadHistory(); }, 5000);
+  refreshTimer = setInterval(() => { loadStats(); loadEvents(); loadLoopGuard(); loadHistory(); loadLlmUsage(); }, 5000);
 }
 function stopRefresh() { if (refreshTimer) clearInterval(refreshTimer); }
 document.getElementById('autoRefresh').addEventListener('change', (e) => {
@@ -653,6 +695,55 @@ async function loadHistory() {
 }
 document.getElementById('historyHours')?.addEventListener('change', loadHistory);
 
+// --- LLM Usage & Cost ---
+function fmtUsd(n) {
+  if (!Number.isFinite(n)) return '$0.00';
+  if (n >= 100) return '$' + n.toFixed(0);
+  if (n >= 1)   return '$' + n.toFixed(2);
+  return '$' + n.toFixed(4);
+}
+function fmtInt(n) { return (n||0).toLocaleString(); }
+async function loadLlmUsage() {
+  const hours = Number(document.getElementById('llmHours').value) || 24;
+  try {
+    const r = await fetch('/api/security/llm-usage?hours=' + hours, { headers: authHeaders() });
+    const j = await r.json();
+    if (!j.ok) return;
+    document.getElementById('llmCalls').textContent = fmtInt(j.totalCalls);
+    document.getElementById('llmCost').textContent = fmtUsd(j.totalCostUsd);
+    document.getElementById('llmTokens').textContent = fmtInt((j.totalPromptTokens||0) + (j.totalOutputTokens||0));
+    document.getElementById('llmLatency').textContent = (j.avgLatencyMs||0) + 'ms';
+
+    const badge = document.getElementById('llmBudgetBadge');
+    if (j.budgetExceeded) {
+      badge.style.display = 'inline-block';
+      badge.style.background = '#7f1d1d';
+      badge.style.color = '#fca5a5';
+      badge.textContent = 'BUDGET EXCEEDED';
+    } else {
+      badge.style.display = 'none';
+    }
+
+    const prov = document.getElementById('llmProviderTable');
+    if (!j.byProvider || j.byProvider.length === 0) {
+      prov.innerHTML = '<tr><td colspan="4" style="color:#64748b;text-align:center;">No calls in this window</td></tr>';
+    } else {
+      prov.innerHTML = j.byProvider.sort((a,b)=>b.costUsd-a.costUsd).map(p =>
+        `<tr><td>${esc(p.provider)}</td><td>${fmtInt(p.calls)}</td><td>${fmtInt(p.tokens)}</td><td>${fmtUsd(p.costUsd)}</td></tr>`
+      ).join('');
+    }
+    const mod = document.getElementById('llmModelTable');
+    if (!j.byModel || j.byModel.length === 0) {
+      mod.innerHTML = '<tr><td colspan="4" style="color:#64748b;text-align:center;">No models recorded</td></tr>';
+    } else {
+      mod.innerHTML = j.byModel.sort((a,b)=>b.costUsd-a.costUsd).map(m =>
+        `<tr><td>${esc(m.model)}</td><td>${fmtInt(m.calls)}</td><td>${fmtInt(m.tokens)}</td><td>${fmtUsd(m.costUsd)}</td></tr>`
+      ).join('');
+    }
+  } catch {}
+}
+document.getElementById('llmHours')?.addEventListener('change', loadLlmUsage);
+
 // --- Init ---
 loadStats();
 loadEvents();
@@ -661,6 +752,7 @@ loadChainStatus();
 loadLoopGuard();
 loadPublicKey();
 loadHistory();
+loadLlmUsage();
 startRefresh();
 </script>
 </body>

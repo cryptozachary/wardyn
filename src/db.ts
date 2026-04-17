@@ -180,6 +180,15 @@ function migrate(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_llm_usage_provider ON llm_usage(provider, ts);
   `);
 
+  // Runtime-editable settings (shadow env for a narrow allow-list)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key         TEXT PRIMARY KEY,
+      value       TEXT NOT NULL,
+      updated_at  INTEGER NOT NULL
+    );
+  `);
+
   // Canvas items (agent-pushed UI surface)
   db.exec(`
     CREATE TABLE IF NOT EXISTS canvas_items (

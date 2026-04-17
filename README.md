@@ -38,6 +38,12 @@ Open `http://127.0.0.1:3000/login` and sign in with the `API_TOKEN`.
 | Slack signing secret | per channel | — | Stored in encrypted vault (`config/providers.enc`). Required for `/webhook/slack`. |
 | `ENABLE_HSTS` | no | off (on in prod) | Forces `Strict-Transport-Security` even in dev. |
 | `LOG_LEVEL` | no | `info` | One of `debug`/`info`/`warn`/`error`. |
+| `AUDIT_RETENTION_DAYS` | no | `90` | Audit events older than this are pruned every 6h. Hash-chain head is re-seeded from the newest survivor. |
+| `CANVAS_RETENTION_DAYS` | no | `7` | Canvas items older than this are pruned every 6h. |
+| `CANVAS_MAX_ITEMS` | no | `5000` | Hard cap on total canvas rows after age prune. |
+| `LLM_DAILY_BUDGET_USD` | no | — | If set, LLM calls are refused once the last 24h of `llm_usage` rows exceed this budget. |
+| `WARDYN_AUTOUPDATE` | no | on (packaged) | Set to `0` to disable Electron auto-update checks. |
+| `WARDYN_UPDATE_URL` | no | `publish` in package.json | Override the update feed URL at runtime. |
 
 ## Auth model
 
@@ -144,7 +150,9 @@ npm run electron  # launches the desktop app
 
 ### First launch
 
-1. A setup window prompts the user to choose a vault passphrase (≥ 8 chars).
+1. A setup window prompts the user to choose a vault passphrase. The policy
+   is ≥ 12 chars and at least 3 of 4 character classes (lowercase, uppercase,
+   digit, symbol); a single repeated character is rejected.
 2. The app generates a random `API_TOKEN` and `COOKIE_SECRET`, seeds the
    encrypted provider vault with a placeholder entry (so the passphrase can
    be round-trip-verified later), and stores the two tokens under
@@ -175,10 +183,60 @@ In `npm run electron` dev mode, `DATA_DIR` = repo root so existing
   raises the bar for **offline** disk theft and **pre-unlock** compromise.
 - Losing the passphrase bricks the vault. Back it up out-of-band.
 
+### Auto-update
+
+Packaged builds self-update via `electron-updater` against the feed declared in
+`package.json#build.publish` (override per-host with `WARDYN_UPDATE_URL`). The
+app checks on launch and every 6 hours; when an update downloads, a restart
+dialog is shown. Disable entirely with `WARDYN_AUTOUPDATE=0`. The dependency
+is optional — the app still runs if `electron-updater` isn't installed.
+
+### Gateway child process
+
+The main process spawns the compiled gateway as a child and restarts it on
+unexpected exit with exponential backoff (500 ms → 10 s), capped at 5 restarts
+per 60 s window. If the cap is hit the app surfaces a fatal error rather than
+silently crash-looping.
+
+## Production readiness
+
+Features that matter for single-operator production use:
+
+- **Encryption at rest** — session message payloads (`sessions.messages` +
+  `sessions.summary` in SQLite) are encrypted with AES-256-GCM. The key is
+  derived per-record from `KEY_PASSPHRASE` via scrypt; ciphertext is tagged
+  with a `v1:` prefix to distinguish from legacy plaintext. When
+  `KEY_PASSPHRASE` is unset, payloads round-trip as plaintext so dev and
+  tests still work.
+- **Retention** — `AUDIT_RETENTION_DAYS` and `CANVAS_RETENTION_DAYS` +
+  `CANVAS_MAX_ITEMS` run on a 6-hour interval. The audit log's hash-chain
+  head is re-seeded from the newest surviving row so future events chain
+  continuously.
+- **Loop guard persistence** — per-session circuit-breaker state survives
+  process restarts via the `loop_guard_state` table; stale rows (> 7 days)
+  are dropped automatically.
+- **LLM cost tracking** — every `callLLM` invocation records provider, model,
+  token counts, latency, and estimated USD cost into `llm_usage`. View the
+  rollup at `GET /api/security/llm-usage?hours=24`. Set
+  `LLM_DAILY_BUDGET_USD` to enforce a hard budget; overrides to the price
+  table live in `config/llm-pricing.json`.
+- **SSRF + DNS-rebinding** — `checkSSRF` + `safeLookup` together close the
+  TOCTOU window by ensuring the socket connects to the same address that
+  was validated. Used by hub skill imports and any outbound fetch routed
+  through the SSRF guard.
+- **Backup integrity** — `npm run backup` writes a SHA-256 checksum for
+  every file into the manifest and runs `PRAGMA quick_check` on the DB
+  snapshot immediately after writing. Validation failure exits code 2, so
+  a broken archive never lands in your rotation.
+- **Heartbeat safety** — smart-mode triage prompts are scanned through
+  SafetySpine before execution; blocks are routed to the audit log.
+
 ## Tests
 
 ```bash
 npm run test:security     # unit security tests
 npm run test:integration  # auth + CSRF + webhook verification (in-process)
+npm run test:readiness    # encryption, retention, loop-guard persistence, cost tracking, SSRF lookup
+npm test                  # runs all three above in sequence
 npm run build && npm run smoke  # boot the compiled server and probe the contract
 ```

@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Wardyn — Settings</title>
+  <link rel="icon" type="image/png" href="/ui/assets/favicon.png" />
+  <link rel="stylesheet" href="/ui/styles.css" />
+  <style>
+    .group-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; color: #94a3b8; margin: 18px 0 8px; }
+    .settings-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .settings-table th { text-align: left; color: var(--text-muted); font-weight: 600; padding: 8px; border-bottom: 1px solid var(--border); font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; }
+    .settings-table td { padding: 10px 8px; color: #cbd5e1; border-bottom: 1px solid #1e2d4a22; vertical-align: top; }
+    .settings-table td.key { font-family: monospace; color: #e2e8f0; font-weight: 600; white-space: nowrap; }
+    .settings-table td.desc { font-size: 11px; color: #94a3b8; line-height: 1.4; }
+    .settings-table td.value { white-space: nowrap; }
+    .settings-table input[type="text"], .settings-table input[type="number"] {
+      background: #1e293b; color: #e2e8f0; border: 1px solid #1e2d4a; border-radius: 4px; padding: 4px 8px; font-size: 12px; width: 140px; font-family: monospace;
+    }
+    .source-badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 700; text-transform: uppercase; margin-left: 6px; }
+    .source-badge.db      { background: #1e3a5f; color: #60a5fa; }
+    .source-badge.env     { background: #4a3d1a; color: #facc15; }
+    .source-badge.default { background: #1e293b; color: #94a3b8; }
+    .source-badge.unset   { background: #1e293b; color: #64748b; }
+    .btn-sm { padding: 4px 10px; font-size: 11px; border-radius: 4px; cursor: pointer; border: 1px solid var(--border); background: #1e293b; color: #cbd5e1; }
+    .btn-sm:hover { background: #2d3a52; color: var(--text); }
+    .btn-sm.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .btn-sm.danger  { background: #1a0a0a; border-color: #7f1d1d; color: #fca5a5; }
+    .readonly-val { font-family: monospace; color: #e2e8f0; }
+    .readonly-val.muted { color: #64748b; }
+    .secret-status { font-family: monospace; font-size: 12px; }
+    .secret-status.set { color: #4ade80; }
+    .secret-status.unset { color: #f87171; }
+    .note { font-size: 11px; color: #64748b; margin-top: 4px; }
+    .msg { font-size: 12px; margin-top: 8px; min-height: 14px; }
+    .msg.ok { color: #4ade80; }
+    .msg.fail { color: #f87171; }
+  </style>
+</head>
+<body>
+  <nav class="navbar">
+    <a class="navbar-brand" href="/ui/hub.html">
+      <img src="/ui/assets/logo-icon.png" alt="" class="brand-logo" />wardyn
+    </a>
+    <div class="nav-links">
+      <a class="nav-link" href="/ui/hub.html">Hub</a>
+      <a class="nav-link" href="/chat">Chat</a>
+      <a class="nav-link" href="/ui/skills.html">Skills</a>
+      <a class="nav-link" href="/ui/canvas.html">Canvas</a>
+      <a class="nav-link" href="/ui/heartbeat.html">Heartbeat</a>
+      <a class="nav-link" href="/ui/approvals.html">Approvals</a>
+      <a class="nav-link" href="/ui/security.html">Security</a>
+      <a class="nav-link active" href="/ui/settings.html">Settings</a>
+      <a class="nav-link" href="/ui/setup.html">Setup</a>
+    </div>
+  </nav>
+
+  <div class="container">
+    <div class="page-header">
+      <h1 class="page-title">settings</h1>
+    </div>
+    <p class="page-subtitle">Runtime configuration. Edit the fields below and click Save — changes take effect immediately for the listed settings. Boot-only values require a restart.</p>
+
+    <section>
+      <h2>Runtime-editable</h2>
+      <p class="note">These values shadow their matching <code>.env</code> entries at runtime. Clearing a field reverts to the <code>.env</code>/default value.</p>
+      <div id="runtimeMsg" class="msg"></div>
+      <table class="settings-table">
+        <thead>
+          <tr><th>Key</th><th>Value</th><th>Default</th><th>Description</th><th></th></tr>
+        </thead>
+        <tbody id="runtimeTbody"><tr><td colspan="5" style="color:#64748b;text-align:center;">loading…</td></tr></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Boot-only</h2>
+      <p class="note">Read-only. Set via environment variable (or Electron launch config) and restart.</p>
+      <table class="settings-table">
+        <thead><tr><th>Key</th><th>Value</th></tr></thead>
+        <tbody id="bootTbody"><tr><td colspan="2" style="color:#64748b;text-align:center;">loading…</td></tr></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Secrets</h2>
+      <p class="note">Presence only — values are never returned.</p>
+      <table class="settings-table">
+        <thead><tr><th>Key</th><th>Status</th></tr></thead>
+        <tbody id="secretTbody"><tr><td colspan="2" style="color:#64748b;text-align:center;">loading…</td></tr></tbody>
+      </table>
+    </section>
+  </div>
+
+<script>
+const token = localStorage.getItem('wardyn_api_token') || localStorage.getItem('secureclaw_api_token') || '';
+function getCsrf() { const m = document.cookie.match(/(?:^|;\s*)wardyn_csrf=([^;]+)/); return m ? m[1] : ''; }
+function authHeaders(withCsrf) {
+  const h = { 'Content-Type': 'application/json' };
+  if (token) h['x-api-token'] = token;
+  if (withCsrf) {
+    const csrf = getCsrf();
+    if (csrf) h['x-csrf-token'] = csrf;
+  }
+  return h;
+}
+function esc(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+function msg(id, text, ok) {
+  const el = document.getElementById(id);
+  el.textContent = text || '';
+  el.className = 'msg' + (text ? (ok ? ' ok' : ' fail') : '');
+}
+
+async function loadSettings() {
+  try {
+    const r = await fetch('/api/settings', { headers: authHeaders(false) });
+    const j = await r.json();
+    if (!j.ok) { msg('runtimeMsg', 'Failed to load settings', false); return; }
+    renderRuntime(j.runtime);
+    renderBoot(j.bootOnly);
+    renderSecrets(j.secrets);
+  } catch (e) {
+    msg('runtimeMsg', 'Failed to load settings: ' + e.message, false);
+  }
+}
+
+function renderRuntime(list) {
+  const tb = document.getElementById('runtimeTbody');
+  if (!list || list.length === 0) {
+    tb.innerHTML = '<tr><td colspan="5" style="color:#64748b;text-align:center;">No editable settings</td></tr>';
+    return;
+  }
+  tb.innerHTML = list.map(s => {
+    const val = s.value == null ? '' : s.value;
+    const bounds = [];
+    if (s.min != null) bounds.push('min ' + s.min);
+    if (s.max != null) bounds.push('max ' + s.max);
+    const inputType = s.kind === 'number' ? 'number' : 'text';
+    const minAttr = s.min != null ? ` min="${s.min}"` : '';
+    const maxAttr = s.max != null ? ` max="${s.max}"` : '';
+    return `<tr data-key="${esc(s.key)}">
+      <td class="key">${esc(s.key)}</td>
+      <td class="value">
+        <input type="${inputType}"${minAttr}${maxAttr} value="${esc(val)}" data-key="${esc(s.key)}" />
+        <span class="source-badge ${esc(s.source)}">${esc(s.source)}</span>
+      </td>
+      <td class="readonly-val ${s.default == null ? 'muted' : ''}">${s.default == null ? '—' : esc(s.default)}</td>
+      <td class="desc">${esc(s.description)}${bounds.length ? ' <span style="color:#64748b;">(' + bounds.join(', ') + ')</span>' : ''}</td>
+      <td style="text-align:right; white-space:nowrap;">
+        <button class="btn-sm primary" data-action="save" data-key="${esc(s.key)}">Save</button>
+        <button class="btn-sm" data-action="reset" data-key="${esc(s.key)}">Reset</button>
+      </td>
+    </tr>`;
+  }).join('');
+  tb.querySelectorAll('button[data-action="save"]').forEach(b => b.addEventListener('click', () => saveSetting(b.dataset.key)));
+  tb.querySelectorAll('button[data-action="reset"]').forEach(b => b.addEventListener('click', () => resetSetting(b.dataset.key)));
+}
+
+async function saveSetting(key) {
+  const input = document.querySelector(`input[data-key="${CSS.escape(key)}"]`);
+  if (!input) return;
+  const value = input.value.trim();
+  try {
+    const r = await fetch('/api/settings', {
+      method: 'POST',
+      headers: authHeaders(true),
+      body: JSON.stringify({ key, value: value === '' ? null : value }),
+    });
+    const j = await r.json();
+    if (!j.ok) { msg('runtimeMsg', j.error || 'save failed', false); return; }
+    msg('runtimeMsg', 'Saved ' + key, true);
+    renderRuntime(j.settings);
+  } catch (e) {
+    msg('runtimeMsg', 'save failed: ' + e.message, false);
+  }
+}
+
+async function resetSetting(key) {
+  try {
+    const r = await fetch('/api/settings/' + encodeURIComponent(key), {
+      method: 'DELETE',
+      headers: authHeaders(true),
+    });
+    const j = await r.json();
+    if (!j.ok) { msg('runtimeMsg', j.error || 'reset failed', false); return; }
+    msg('runtimeMsg', 'Reset ' + key + ' to env/default', true);
+    renderRuntime(j.settings);
+  } catch (e) {
+    msg('runtimeMsg', 'reset failed: ' + e.message, false);
+  }
+}
+
+function renderBoot(list) {
+  const tb = document.getElementById('bootTbody');
+  if (!list || list.length === 0) {
+    tb.innerHTML = '<tr><td colspan="2" style="color:#64748b;text-align:center;">Nothing set</td></tr>';
+    return;
+  }
+  tb.innerHTML = list.map(b =>
+    `<tr>
+      <td class="key">${esc(b.key)}</td>
+      <td><span class="readonly-val ${b.value == null ? 'muted' : ''}">${b.value == null || b.value === '' ? '—' : esc(b.value)}</span>
+        <span class="source-badge ${esc(b.source)}">${esc(b.source)}</span></td>
+    </tr>`
+  ).join('');
+}
+
+function renderSecrets(list) {
+  const tb = document.getElementById('secretTbody');
+  if (!list || list.length === 0) {
+    tb.innerHTML = '<tr><td colspan="2" style="color:#64748b;text-align:center;">—</td></tr>';
+    return;
+  }
+  tb.innerHTML = list.map(s =>
+    `<tr>
+      <td class="key">${esc(s.key)}</td>
+      <td class="secret-status ${s.set ? 'set' : 'unset'}">${s.set ? `set (${s.length} chars)` : 'not set'}</td>
+    </tr>`
+  ).join('');
+}
+
+loadSettings();
+</script>
+</body>
+</html>
