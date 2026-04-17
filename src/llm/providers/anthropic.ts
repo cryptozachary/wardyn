@@ -13,7 +13,7 @@ function getModel(): string {
       if (cfg.anthropic) return cfg.anthropic;
     } catch {}
   }
-  return process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514";
+  return process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
 }
 
 export const anthropicProvider: LLMProvider = {
@@ -118,9 +118,16 @@ function convertMessages(msgs: CallPayload["messages"]): any[] {
 
 function parseResponse(data: any, model: string): LLMResponse {
   const content = data.content ?? [];
+  // Anthropic reports cache reads/writes separately from input_tokens, so we sum
+  // them into a single `promptTokens` (total input) and track the subsets.
+  const uncached = data.usage?.input_tokens ?? 0;
+  const cached   = data.usage?.cache_read_input_tokens ?? 0;
+  const writes   = data.usage?.cache_creation_input_tokens ?? 0;
   const usage = {
-    promptTokens: data.usage?.input_tokens,
+    promptTokens: uncached + cached + writes,
     outputTokens: data.usage?.output_tokens,
+    cachedTokens: cached,
+    cacheWriteTokens: writes,
     model: data.model ?? model,
   };
 

@@ -20,8 +20,15 @@ export interface CallPayload {
 }
 
 export interface LLMUsage {
+  /** Total input tokens (includes any cached reads and cache writes). */
   promptTokens?: number;
   outputTokens?: number;
+  /** Subset of promptTokens served from cache (OpenAI prompt_tokens_details.cached_tokens,
+   *  Anthropic cache_read_input_tokens). Billed at cheap cache-hit rate. */
+  cachedTokens?: number;
+  /** Anthropic-only: subset of input tokens written to cache (cache_creation_input_tokens).
+   *  Priced higher than base input. OpenAI does not charge for cache writes. */
+  cacheWriteTokens?: number;
   /** Provider-reported cost in USD when available. */
   costUsd?: number;
   /** Model string echoed from the provider response, if known. */

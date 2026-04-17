@@ -329,6 +329,7 @@
         <div class="card"><div class="value" id="llmCalls">0</div><div class="label">Calls</div></div>
         <div class="card"><div class="value" id="llmCost">$0.00</div><div class="label">Cost (est.)</div></div>
         <div class="card"><div class="value" id="llmTokens">0</div><div class="label">Tokens</div></div>
+        <div class="card"><div class="value" id="llmCacheHit">0%</div><div class="label">Cache Hit Rate</div></div>
         <div class="card"><div class="value" id="llmLatency">0ms</div><div class="label">Avg Latency</div></div>
       </div>
       <div class="two-col" style="margin-top:12px;">
@@ -342,8 +343,8 @@
         <div>
           <h3 style="font-size:12px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px;">By Model</h3>
           <table class="audit-table">
-            <thead><tr><th>Model</th><th>Calls</th><th>Tokens</th><th>Cost</th></tr></thead>
-            <tbody id="llmModelTable"><tr><td colspan="4" style="color:#64748b;text-align:center;">loading…</td></tr></tbody>
+            <thead><tr><th>Model</th><th>Calls</th><th>Tokens</th><th>Cached</th><th>Cost</th></tr></thead>
+            <tbody id="llmModelTable"><tr><td colspan="5" style="color:#64748b;text-align:center;">loading…</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -712,6 +713,10 @@ async function loadLlmUsage() {
     document.getElementById('llmCalls').textContent = fmtInt(j.totalCalls);
     document.getElementById('llmCost').textContent = fmtUsd(j.totalCostUsd);
     document.getElementById('llmTokens').textContent = fmtInt((j.totalPromptTokens||0) + (j.totalOutputTokens||0));
+    const inTok = j.totalPromptTokens || 0;
+    const cacheTok = j.totalCachedTokens || 0;
+    const hitPct = inTok > 0 ? Math.round((cacheTok / inTok) * 100) : 0;
+    document.getElementById('llmCacheHit').textContent = hitPct + '%';
     document.getElementById('llmLatency').textContent = (j.avgLatencyMs||0) + 'ms';
 
     const badge = document.getElementById('llmBudgetBadge');
@@ -734,10 +739,10 @@ async function loadLlmUsage() {
     }
     const mod = document.getElementById('llmModelTable');
     if (!j.byModel || j.byModel.length === 0) {
-      mod.innerHTML = '<tr><td colspan="4" style="color:#64748b;text-align:center;">No models recorded</td></tr>';
+      mod.innerHTML = '<tr><td colspan="5" style="color:#64748b;text-align:center;">No models recorded</td></tr>';
     } else {
       mod.innerHTML = j.byModel.sort((a,b)=>b.costUsd-a.costUsd).map(m =>
-        `<tr><td>${esc(m.model)}</td><td>${fmtInt(m.calls)}</td><td>${fmtInt(m.tokens)}</td><td>${fmtUsd(m.costUsd)}</td></tr>`
+        `<tr><td>${esc(m.model)}</td><td>${fmtInt(m.calls)}</td><td>${fmtInt(m.tokens)}</td><td>${fmtInt(m.cachedTokens||0)}</td><td>${fmtUsd(m.costUsd)}</td></tr>`
       ).join('');
     }
   } catch {}

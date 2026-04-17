@@ -205,6 +205,8 @@ function migrate(db: Database.Database): void {
   // Additive migrations for existing installations
   addColumnIfMissing(db, "sessions", "strategist_mode", "INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(db, "sessions", "thinking_level", "TEXT NOT NULL DEFAULT 'medium'");
+  addColumnIfMissing(db, "llm_usage", "cached_tokens", "INTEGER");
+  addColumnIfMissing(db, "llm_usage", "cache_write_tokens", "INTEGER");
 }
 
 /** Idempotent ALTER TABLE — adds a column only if it doesn't already exist. */

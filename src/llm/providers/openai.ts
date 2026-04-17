@@ -55,6 +55,7 @@ export const openaiProvider: LLMProvider = {
     const usage = {
       promptTokens: res.data.usage?.prompt_tokens,
       outputTokens: res.data.usage?.completion_tokens,
+      cachedTokens: res.data.usage?.prompt_tokens_details?.cached_tokens ?? 0,
       model: res.data.model ?? model,
     };
     if (choice.tool_calls?.length) {

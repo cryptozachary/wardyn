@@ -174,18 +174,42 @@ async function run() {
   const usage = await import("../src/llm/usageStore.js");
 
   await test("estimateCost uses price table for known models", () => {
-    const c = usage.estimateCost("claude-sonnet-4-20250514", 1_000_000, 1_000_000);
-    // $3 in + $15 out per 1M tokens = $18
+    // claude-sonnet-4-6: $3 in + $15 out per 1M = $18 for 1M+1M tokens
+    const c = usage.estimateCost("claude-sonnet-4-6", 1_000_000, 1_000_000);
     assert.ok(typeof c === "number" && Math.abs(c - 18) < 0.001, `got ${c}`);
     assert.strictEqual(usage.estimateCost("unknown-model", 1000, 1000), undefined);
     assert.strictEqual(usage.estimateCost(undefined, 100, 100), undefined);
   });
 
+  await test("estimateCost discounts cached input tokens", () => {
+    // gpt-5.4 short-context (<128k in): $2.50 base / $0.25 cached / $15 out per 1M.
+    // 100k input with 80k cached, 50k out → 20k*$2.50 + 80k*$0.25 + 50k*$15 per 1M
+    // = $0.05 + $0.02 + $0.75 = $0.82
+    const c = usage.estimateCost("gpt-5.4", 100_000, 50_000, 80_000, 0);
+    assert.ok(typeof c === "number" && Math.abs(c - 0.82) < 0.001, `got ${c}`);
+  });
+
+  await test("estimateCost applies long-context tier for gpt-5.4", () => {
+    // >128k prompt → long rates: $5 in / $0.50 cached / $22.50 out per 1M
+    // 200k uncached = $1.00; 0 cached; 10k out = $0.225 → $1.225
+    const c = usage.estimateCost("gpt-5.4", 200_000, 10_000, 0, 0);
+    assert.ok(typeof c === "number" && Math.abs(c - 1.225) < 0.001, `got ${c}`);
+  });
+
+  await test("estimateCost handles Anthropic cache writes", () => {
+    // claude-sonnet-4-6: $3 base / $0.30 cached-read / $3.75 cache-write / $15 out per 1M
+    // 100k uncached + 200k cached-read + 300k cache-write + 50k out
+    // = 0.1*$3 + 0.2*$0.30 + 0.3*$3.75 + 0.05*$15 = $0.30 + $0.06 + $1.125 + $0.75 = $2.235
+    const c = usage.estimateCost("claude-sonnet-4-6", 600_000, 50_000, 200_000, 300_000);
+    assert.ok(typeof c === "number" && Math.abs(c - 2.235) < 0.001, `got ${c}`);
+  });
+
   await test("recordUsage aggregates into getUsageSummary", () => {
     db.prepare("DELETE FROM llm_usage").run();
     usage.recordUsage({
-      ts: Date.now(), provider: "anthropic", model: "claude-sonnet-4-20250514",
-      promptTokens: 500_000, outputTokens: 100_000, durationMs: 1200, fallbackUsed: false,
+      ts: Date.now(), provider: "anthropic", model: "claude-sonnet-4-6",
+      promptTokens: 500_000, outputTokens: 100_000, cachedTokens: 200_000,
+      durationMs: 1200, fallbackUsed: false,
     });
     usage.recordUsage({
       ts: Date.now(), provider: "openai", model: "gpt-4o-mini",
@@ -195,6 +219,7 @@ async function run() {
     assert.strictEqual(s.totalCalls, 2);
     assert.strictEqual(s.totalPromptTokens, 501_000);
     assert.strictEqual(s.totalOutputTokens, 102_000);
+    assert.strictEqual(s.totalCachedTokens, 200_000);
     assert.strictEqual(s.byProvider.length, 2);
     assert.ok(s.totalCostUsd > 0);
   });
@@ -203,7 +228,7 @@ async function run() {
     db.prepare("DELETE FROM llm_usage").run();
     process.env.LLM_DAILY_BUDGET_USD = "5";
     usage.recordUsage({
-      ts: Date.now(), provider: "anthropic", model: "claude-opus-4-20250514",
+      ts: Date.now(), provider: "anthropic", model: "claude-opus-4-6",
       promptTokens: 500_000, outputTokens: 500_000, durationMs: 1000, fallbackUsed: false,
     });
     assert.strictEqual(usage.isBudgetExceeded(), true, "should be over $5 budget");

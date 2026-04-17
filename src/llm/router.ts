@@ -127,6 +127,8 @@ export async function callLLM(
           channel: ctx?.channel,
           promptTokens: res.usage?.promptTokens,
           outputTokens: res.usage?.outputTokens,
+          cachedTokens: res.usage?.cachedTokens,
+          cacheWriteTokens: res.usage?.cacheWriteTokens,
           durationMs: Date.now() - started,
           fallbackUsed: fallback,
         });
