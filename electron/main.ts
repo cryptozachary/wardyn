@@ -29,6 +29,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { loadBootstrap, saveBootstrap } from "./keychain.js";
 import { loadKeys, storeKey } from "../src/security/keyVault.js";
+import { setupAutoUpdate } from "./autoUpdate.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -45,11 +46,33 @@ class CancelledError extends Error {
   constructor(msg: string) { super(msg); this.name = "CancelledError"; }
 }
 
+/**
+ * Enforce a minimal passphrase complexity policy on first-run setup. We're
+ * not trying to be NIST — we just want to keep operators from picking a
+ * passphrase that would fall to a few hours of offline scrypt-guessing.
+ *
+ * Returns an error message to surface, or null when acceptable.
+ */
+function checkPassphraseStrength(pw: string): string | null {
+  if (!pw || pw.length < 12) return "Passphrase must be at least 12 characters.";
+  const classes = [/[a-z]/, /[A-Z]/, /\d/, /[^a-zA-Z0-9]/].filter(r => r.test(pw)).length;
+  if (classes < 3) return "Passphrase needs at least 3 of: lowercase, uppercase, digit, symbol.";
+  if (/^(.)\1+$/.test(pw)) return "Passphrase cannot be a single repeated character.";
+  if (/^(password|passphrase|12345|qwerty|letmein)/i.test(pw)) return "Passphrase is in the common-password list.";
+  return null;
+}
+
 let gatewayChild: ChildProcess | null = null;
 let mainWindow: BrowserWindow | null = null;
 let setupWindow: BrowserWindow | null = null;
 let unlockWindow: BrowserWindow | null = null;
 let booting = true;
+let shuttingDown = false;
+let restartCount = 0;
+let restartWindowStart = Date.now();
+const MAX_RESTARTS_PER_WINDOW = 5;
+const RESTART_WINDOW_MS = 60_000;
+let childEnv: NodeJS.ProcessEnv | null = null;
 
 const APP_ICON = path.join(__dirname, "assets", process.platform === "win32" ? "icon.ico" : "icon.png");
 
@@ -76,7 +99,8 @@ async function showSetupWindow(): Promise<{ passphrase: string; apiToken: string
 
     ipcMain.handleOnce("setup:submit", async (_evt, { passphrase }: { passphrase: string }) => {
       try {
-        if (!passphrase || passphrase.length < 8) throw new Error("Passphrase must be ≥ 8 characters");
+        const weakReason = checkPassphraseStrength(passphrase);
+        if (weakReason) throw new Error(weakReason);
         const apiToken = randomBytes(24).toString("hex");
         const cookieSecret = randomBytes(32).toString("hex");
         await fs.mkdir(path.dirname(VAULT_PATH), { recursive: true });
@@ -254,6 +278,7 @@ function spawnGateway(env: NodeJS.ProcessEnv): ChildProcess {
   const err = openSync(logPath, "a");
   console.log(`[electron] gateway stdio → ${logPath}`);
   console.log(`[electron] spawning gateway with ${nodeBin}`);
+  childEnv = env;
   const child = spawn(nodeBin, [entry], {
     cwd: DATA_DIR,
     env,
@@ -261,7 +286,32 @@ function spawnGateway(env: NodeJS.ProcessEnv): ChildProcess {
   });
   child.on("exit", (code) => {
     console.error(`[electron] gateway exited (code=${code}) — see ${logPath}`);
-    if (!booting) app.quit();
+    if (booting || shuttingDown) return;
+
+    // Restart with backoff, guarded against crash-loops.
+    const now = Date.now();
+    if (now - restartWindowStart > RESTART_WINDOW_MS) {
+      restartCount = 0;
+      restartWindowStart = now;
+    }
+    restartCount++;
+    if (restartCount > MAX_RESTARTS_PER_WINDOW) {
+      console.error(`[electron] gateway crashed ${restartCount}x in ${RESTART_WINDOW_MS / 1000}s — giving up`);
+      app.quit();
+      return;
+    }
+
+    const delayMs = Math.min(10_000, 500 * 2 ** (restartCount - 1));
+    console.warn(`[electron] restarting gateway in ${delayMs}ms (attempt ${restartCount})`);
+    setTimeout(() => {
+      if (shuttingDown || !childEnv) return;
+      try {
+        gatewayChild = spawnGateway(childEnv);
+      } catch (err) {
+        console.error(`[electron] gateway respawn failed:`, err);
+        app.quit();
+      }
+    }, delayMs);
   });
   return child;
 }
@@ -332,6 +382,10 @@ async function boot() {
   });
   await mainWindow.loadURL(`http://${HOST}:${PORT}/ui/hub.html`);
   booting = false;
+
+  // Kick off auto-update after the main window is live so an update check
+  // failure can't block boot. No-op in dev or when the dep is absent.
+  setupAutoUpdate().catch((err) => console.warn("[electron] autoUpdate:", err));
 }
 
 app.whenReady().then(boot).catch((err) => {
@@ -348,10 +402,12 @@ app.on("window-all-closed", () => {
   // During boot the unlock/setup window closes momentarily before the main
   // window opens — don't let that tear the app down.
   if (booting) return;
+  shuttingDown = true;
   if (gatewayChild && !gatewayChild.killed) gatewayChild.kill("SIGTERM");
   app.quit();
 });
 
 app.on("before-quit", () => {
+  shuttingDown = true;
   if (gatewayChild && !gatewayChild.killed) gatewayChild.kill("SIGTERM");
 });

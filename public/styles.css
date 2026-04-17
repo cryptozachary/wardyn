@@ -415,3 +415,31 @@ pre {
 .gap-12 { gap: 12px; }
 .gap-16 { gap: 16px; }
 .ml-auto { margin-left: auto; }
+
+/* ──────────────────────────────────────────
+   Responsive — tablet + phone
+   ────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .grid-3 { grid-template-columns: 1fr 1fr; }
+}
+
+@media (max-width: 640px) {
+  body { font-size: 14px; }
+  .navbar { gap: 8px; padding: 0 12px; height: 44px; overflow-x: auto; }
+  .navbar a, .navbar-brand { font-size: 13px; }
+  .grid-2, .grid-3 { grid-template-columns: 1fr; }
+  .grid-auto { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+  .two-col { grid-template-columns: 1fr; }
+  .card, .panel, .container { padding: 12px !important; }
+  table { font-size: 12px; }
+  th, td { padding: 6px 8px !important; }
+  .hide-mobile { display: none !important; }
+  pre, code { font-size: 12px; }
+  input, textarea, select, button { min-height: 40px; } /* touch target */
+}
+
+@media (max-width: 420px) {
+  h1 { font-size: 18px; }
+  h2 { font-size: 16px; }
+  .navbar { font-size: 12px; }
+}

@@ -1,5 +1,6 @@
 import { getDb } from "../db.js";
 import { callLLM } from "../llm/router.js";
+import { encryptPayload, decryptPayload } from "../security/sessionEncryption.js";
 
 const MAX_MESSAGES = 40;
 const MAX_SESSIONS = 200;
@@ -31,11 +32,23 @@ export function loadSession(sessionId: string): Session | null {
   const db = getDb();
   const row = db.prepare("SELECT * FROM sessions WHERE id = ?").get(sessionId) as any;
   if (!row) return null;
+  let messages: SessionMessage[] = [];
+  let summary = row.summary ?? "";
+  try {
+    messages = JSON.parse(decryptPayload(row.messages));
+  } catch {
+    messages = [];
+  }
+  try {
+    if (summary) summary = decryptPayload(summary);
+  } catch {
+    summary = "";
+  }
   return {
     id: row.id,
     userId: row.user_id,
-    summary: row.summary,
-    messages: JSON.parse(row.messages),
+    summary,
+    messages,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     strategistMode: !!row.strategist_mode,
@@ -59,8 +72,8 @@ export function saveSession(session: Session): void {
   `).run(
     session.id,
     session.userId,
-    session.summary,
-    JSON.stringify(session.messages),
+    session.summary ? encryptPayload(session.summary) : "",
+    encryptPayload(JSON.stringify(session.messages)),
     session.createdAt,
     session.updatedAt,
     session.strategistMode ? 1 : 0,
@@ -139,41 +152,51 @@ export function searchSessions(query: string, limit = 50, userId?: string): Sess
   const q = query.trim();
   if (!q) return [];
   const db = getDb();
-  const like = `%${q.replace(/[\\%_]/g, c => "\\" + c)}%`;
+  const qLower = q.toLowerCase();
 
+  // Encrypted payloads can't be LIKE-searched at the SQL level — scan recent
+  // sessions in app code. Cap the scan window so a large session table
+  // doesn't turn every search into a full-table O(n) decrypt.
+  const SCAN_CAP = 500;
   const rows = userId
     ? db.prepare(
         "SELECT id, user_id, summary, messages, updated_at FROM sessions " +
-        "WHERE user_id = ? AND (summary LIKE ? ESCAPE '\\' OR messages LIKE ? ESCAPE '\\') " +
-        "ORDER BY updated_at DESC LIMIT ?"
-      ).all(userId, like, like, limit) as any[]
+        "WHERE user_id = ? ORDER BY updated_at DESC LIMIT ?"
+      ).all(userId, SCAN_CAP) as any[]
     : db.prepare(
         "SELECT id, user_id, summary, messages, updated_at FROM sessions " +
-        "WHERE summary LIKE ? ESCAPE '\\' OR messages LIKE ? ESCAPE '\\' " +
         "ORDER BY updated_at DESC LIMIT ?"
-      ).all(like, like, limit) as any[];
+      ).all(SCAN_CAP) as any[];
 
-  const qLower = q.toLowerCase();
   const hits: SessionSearchHit[] = [];
   for (const r of rows) {
-    let matchIn: "summary" | "message" = "message";
+    if (hits.length >= limit) break;
+
+    let summary = "";
+    let msgs: SessionMessage[] = [];
+    try { summary = r.summary ? decryptPayload(r.summary) : ""; } catch {}
+    try { msgs = JSON.parse(decryptPayload(r.messages)); } catch {}
+
+    let matchIn: "summary" | "message" | null = null;
     let snippet = "";
-    if (r.summary && r.summary.toLowerCase().includes(qLower)) {
+    if (summary && summary.toLowerCase().includes(qLower)) {
       matchIn = "summary";
-      snippet = buildSnippet(r.summary, qLower);
+      snippet = buildSnippet(summary, qLower);
     } else {
-      try {
-        const msgs: SessionMessage[] = JSON.parse(r.messages);
-        const hit = msgs.find(m => typeof m.content === "string" && m.content.toLowerCase().includes(qLower));
-        if (hit && typeof hit.content === "string") snippet = buildSnippet(hit.content, qLower);
-      } catch {}
+      const hit = msgs.find(m => typeof m.content === "string" && m.content.toLowerCase().includes(qLower));
+      if (hit && typeof hit.content === "string") {
+        matchIn = "message";
+        snippet = buildSnippet(hit.content, qLower);
+      }
     }
+
+    if (!matchIn) continue;
     hits.push({
       id: r.id,
       userId: r.user_id,
       updatedAt: r.updated_at,
       matchIn,
-      snippet: snippet || "(match in serialized content)",
+      snippet,
     });
   }
   return hits;

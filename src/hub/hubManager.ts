@@ -9,7 +9,9 @@ import { validate } from "../builder/validator.js";
 import { smokeTest } from "../builder/smokeTest.js";
 import { loadSkills } from "../skills/loader.js";
 import type { BuilderResult } from "../builder/types.js";
-import { checkSSRF } from "../security/ssrfGuard.js";
+import { checkSSRF, safeLookup } from "../security/ssrfGuard.js";
+import http from "http";
+import https from "https";
 import { createSignedManifest, verifySkillCode } from "../security/skillSigning.js";
 import { getDb } from "../db.js";
 
@@ -204,8 +206,15 @@ export async function importFromUrl(
     return { success: false, error: `SSRF blocked: ${ssrf.reason}` };
   }
 
+  // Use a guarded lookup so the connect-time resolution can't be rebound
+  // back to a private range after the pre-flight check passed.
+  const lookup = safeLookup();
+  const agent = url.startsWith("https:")
+    ? new https.Agent({ lookup })
+    : new http.Agent({ lookup });
+
   try {
-    const res = await fetch(url);
+    const res = await fetch(url, { dispatcher: undefined as any, agent } as any);
     if (!res.ok) return { success: false, error: `HTTP ${res.status}: ${res.statusText}` };
     const pkg: ClawPackage = await res.json();
     return importSkill(pkg, runSmokeTestFlag);

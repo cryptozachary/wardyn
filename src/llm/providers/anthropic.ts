@@ -55,7 +55,7 @@ export const anthropicProvider: LLMProvider = {
       }
     });
 
-    return parseResponse(res.data);
+    return parseResponse(res.data, getModel());
   }
 };
 
@@ -116,8 +116,13 @@ function convertMessages(msgs: CallPayload["messages"]): any[] {
   return result;
 }
 
-function parseResponse(data: any): LLMResponse {
+function parseResponse(data: any, model: string): LLMResponse {
   const content = data.content ?? [];
+  const usage = {
+    promptTokens: data.usage?.input_tokens,
+    outputTokens: data.usage?.output_tokens,
+    model: data.model ?? model,
+  };
 
   // Check for tool use
   const toolUseBlocks = content.filter((b: any) => b.type === "tool_use");
@@ -131,11 +136,11 @@ function parseResponse(data: any): LLMResponse {
         arguments: JSON.stringify(b.input ?? {})
       }
     }));
-    return { tool_calls, text: null };
+    return { tool_calls, text: null, usage };
   }
 
   // Extract text
   const textBlocks = content.filter((b: any) => b.type === "text");
   const text = textBlocks.map((b: any) => b.text).join("\n") || null;
-  return { tool_calls: null, text };
+  return { tool_calls: null, text, usage };
 }

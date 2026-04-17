@@ -15,8 +15,9 @@ import { attachWebSocket } from "./channels/websocket.js";
 import { loadHeartbeatConfig, startHeartbeat, type HeartbeatController } from "./orchestrator/heartbeat.js";
 import { seedFromJson, listJobs, getJob, createJob, updateJob, deleteJob } from "./orchestrator/heartbeatStore.js";
 import { listSessions, loadSession, cleanExpiredSessions, searchSessions, setThinkingLevel, THINKING_LEVELS, type ThinkingLevel } from "./orchestrator/sessionStore.js";
-import { pushCanvas, listCanvas, getCanvas, clearCanvas, type CanvasKind } from "./orchestrator/canvasStore.js";
+import { pushCanvas, listCanvas, getCanvas, clearCanvas, pruneCanvas, type CanvasKind } from "./orchestrator/canvasStore.js";
 import { getProviderName, setProviderName, getModelConfig, setModel } from "./llm/router.js";
+import { getUsageSummary, isBudgetExceeded } from "./llm/usageStore.js";
 import { buildSkill } from "./builder/builderAgent.js";
 import { deleteSkill, isProtected } from "./builder/skillWriter.js";
 import { auditLogger } from "./security/auditLog.js";
@@ -809,6 +810,11 @@ app.get("/api/security/tool-history", requireAuth, (req, res) => {
   res.json({ ok: true, ...auditLogger.getToolHistory(hours) });
 });
 
+app.get("/api/security/llm-usage", requireAuth, (req, res) => {
+  const hours = Math.min(Math.max(Number(req.query.hours) || 24, 1), 24 * 30);
+  res.json({ ok: true, ...getUsageSummary(hours), budgetExceeded: isBudgetExceeded() });
+});
+
 app.get("/api/heartbeat/triage-log", requireAuth, (req, res) => {
   const limit = Math.min(Number(req.query.limit) || 50, 200);
   const offset = Number(req.query.offset) || 0;
@@ -1104,6 +1110,16 @@ ensureKeypair();
 // Clean expired sessions every hour
 setInterval(() => cleanExpiredSessions(), 3_600_000).unref();
 setInterval(() => cleanExpiredUploads(), 3_600_000).unref();
+
+// Prune audit log + canvas items on the same cadence. Retention is configurable
+// via env; defaults preserve 90 days of audit trail and 7 days of canvas items.
+const AUDIT_RETENTION_DAYS = Number(process.env.AUDIT_RETENTION_DAYS) || 90;
+const CANVAS_RETENTION_DAYS = Number(process.env.CANVAS_RETENTION_DAYS) || 7;
+const CANVAS_MAX_ITEMS = Number(process.env.CANVAS_MAX_ITEMS) || 5000;
+setInterval(() => {
+  try { auditLogger.pruneOlderThan(AUDIT_RETENTION_DAYS); } catch {}
+  try { pruneCanvas(CANVAS_RETENTION_DAYS, CANVAS_MAX_ITEMS); } catch {}
+}, 6 * 3_600_000).unref();
 
 server.listen(PORT, HOST, () => {
   const bootMs = Date.now() - BOOT_START;

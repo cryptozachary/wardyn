@@ -8,6 +8,8 @@ import { callLLM } from "../llm/router.js";
 import { scanContext, formatSnapshot } from "./contextScanner.js";
 import { getDb } from "../db.js";
 import { listJobs, getJob } from "./heartbeatStore.js";
+import { checkSafe } from "../security/safetySpine.js";
+import { auditLogger } from "../security/auditLog.js";
 
 /* ────────── Triage log ────────── */
 
@@ -362,6 +364,34 @@ async function executeSmartJob(
       durationMs: Date.now() - startMs,
     });
     onResult?.(job, { final: null, skipped: true, reason: triage.reason });
+    return;
+  }
+
+  // Safety gate: triage LLM is instructed but not trusted. Scan the generated
+  // prompt against the shared SafetySpine pattern set before feeding it to the
+  // agent loop. A hit is logged to the audit trail and skipped.
+  const safety = checkSafe(triage.prompt);
+  if (safety.blocked) {
+    const reason = `triage prompt blocked by SafetySpine [${safety.label}]`;
+    try {
+      auditLogger.logBlock(
+        safety.label ?? "triage",
+        triage.prompt,
+        "heartbeat",
+        `heartbeat-${job.name}`,
+        safety.patternIndex,
+      );
+    } catch {}
+    logTriage({
+      ts: Date.now(),
+      job: job.name,
+      mode: "smart",
+      acted: false,
+      reason,
+      prompt: triage.prompt.slice(0, 500),
+      durationMs: Date.now() - startMs,
+    });
+    onResult?.(job, { final: null, skipped: true, reason });
     return;
   }
 

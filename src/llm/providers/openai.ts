@@ -52,9 +52,14 @@ export const openaiProvider: LLMProvider = {
     }
 
     const choice = res.data.choices[0].message;
+    const usage = {
+      promptTokens: res.data.usage?.prompt_tokens,
+      outputTokens: res.data.usage?.completion_tokens,
+      model: res.data.model ?? model,
+    };
     if (choice.tool_calls?.length) {
-      return { tool_calls: choice.tool_calls, text: null };
+      return { tool_calls: choice.tool_calls, text: null, usage };
     }
-    return { tool_calls: null, text: choice.content };
+    return { tool_calls: null, text: choice.content, usage };
   }
 };

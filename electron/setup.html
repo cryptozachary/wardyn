@@ -23,7 +23,7 @@
   <div id="step-passphrase">
     <h1>Welcome to Wardyn</h1>
     <p>Choose a vault passphrase. It encrypts your provider API keys and is <b>required every launch</b>. It is never stored on disk — if you forget it, the vault cannot be recovered.</p>
-    <label>Passphrase (min 8 characters)</label>
+    <label>Passphrase (min 12 chars, with 3 of: lowercase, uppercase, digit, symbol)</label>
     <input id="p1" type="password" autofocus />
     <label>Confirm</label>
     <input id="p2" type="password" />
@@ -48,9 +48,21 @@
     const p1 = document.getElementById("p1");
     const p2 = document.getElementById("p2");
 
+    function clientStrengthError(pw) {
+      if (pw.length < 12) return "Passphrase must be at least 12 characters.";
+      let classes = 0;
+      if (/[a-z]/.test(pw)) classes++;
+      if (/[A-Z]/.test(pw)) classes++;
+      if (/\d/.test(pw)) classes++;
+      if (/[^a-zA-Z0-9]/.test(pw)) classes++;
+      if (classes < 3) return "Need at least 3 of: lowercase, uppercase, digit, symbol.";
+      return null;
+    }
+
     async function submit() {
       err.textContent = "";
-      if (p1.value.length < 8) { err.textContent = "Passphrase must be at least 8 characters."; return; }
+      const weak = clientStrengthError(p1.value);
+      if (weak) { err.textContent = weak; return; }
       if (p1.value !== p2.value) { err.textContent = "Passphrases don't match."; return; }
       const res = await window.wardyn.setupSubmit({ passphrase: p1.value });
       if (!res.ok) { err.textContent = res.error || "Setup failed."; return; }

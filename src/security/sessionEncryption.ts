@@ -1,95 +1,78 @@
 /**
- * Session encryption at rest — AES-256-GCM encryption for session files.
+ * Session encryption at rest — AES-256-GCM for SQLite-stored session messages.
  *
- * Uses KEY_PASSPHRASE (same as vault) to derive an encryption key.
- * Each session file gets a unique salt + IV so identical sessions produce
- * different ciphertext.
+ * Payload layout: "v1:" + base64([salt:16][iv:12][authTag:16][ciphertext])
+ * The "v1:" prefix lets us distinguish ciphertext from legacy plaintext JSON
+ * (which begins with "[" or "{") without ambiguity and makes future format
+ * changes additive.
  *
- * File format: [salt:16][iv:12][authTag:16][ciphertext:...]
- * Same layout as keyVault.ts for consistency.
- *
- * When KEY_PASSPHRASE is not set, sessions are stored as plaintext JSON
- * (backwards compatible — no encryption without a passphrase).
+ * When KEY_PASSPHRASE is unset, payloads round-trip as plaintext JSON so
+ * dev-mode installs and tests without encryption still work.
  */
 
 import { randomBytes, createCipheriv, createDecipheriv, scryptSync } from "crypto";
 import { zeroBuffer } from "./zeroize.js";
 
-const HEADER_LEN = 16 + 12 + 16; // salt + iv + tag
+const CIPHER_PREFIX = "v1:";
+const HEADER_LEN = 16 + 12 + 16;
+const keyCache = new Map<string, Buffer>();
 
 function getPassphrase(): string | null {
   return process.env.KEY_PASSPHRASE || null;
 }
 
-/**
- * Encrypt a session JSON string. Returns a Buffer ready to write to disk.
- * If no passphrase is configured, returns the plain JSON as a Buffer.
- */
-export function encryptSession(json: string): Buffer {
+function deriveKey(passphrase: string, salt: Buffer): Buffer {
+  const cacheKey = passphrase + ":" + salt.toString("hex");
+  const cached = keyCache.get(cacheKey);
+  if (cached) return cached;
+  const key = scryptSync(passphrase, salt, 32);
+  if (keyCache.size > 64) keyCache.clear();
+  keyCache.set(cacheKey, key);
+  return key;
+}
+
+/** Encrypt a JSON string. Returns a storable string (plaintext or "v1:..."). */
+export function encryptPayload(json: string): string {
   const passphrase = getPassphrase();
-  if (!passphrase) return Buffer.from(json, "utf8");
+  if (!passphrase) return json;
 
   const salt = randomBytes(16);
-  const key = scryptSync(passphrase, salt, 32);
   const iv = randomBytes(12);
+  const key = deriveKey(passphrase, salt);
   const cipher = createCipheriv("aes-256-gcm", key, iv);
   const data = Buffer.concat([cipher.update(json, "utf8"), cipher.final()]);
   const tag = cipher.getAuthTag();
-
-  // Wipe key from memory
-  zeroBuffer(key as Buffer);
-
-  return Buffer.concat([salt, iv, tag, data]);
+  return CIPHER_PREFIX + Buffer.concat([salt, iv, tag, data]).toString("base64");
 }
 
-/**
- * Decrypt a session file buffer back to JSON string.
- * Auto-detects plaintext vs encrypted (plaintext starts with '{').
- */
-export function decryptSession(buf: Buffer): string {
-  // Auto-detect: plaintext JSON starts with '{' (0x7B)
-  if (buf.length > 0 && buf[0] === 0x7B) {
-    return buf.toString("utf8");
-  }
+/** Decrypt a payload. Transparently passes through plaintext JSON. */
+export function decryptPayload(stored: string): string {
+  if (!stored) return stored;
+  if (!stored.startsWith(CIPHER_PREFIX)) return stored;
 
   const passphrase = getPassphrase();
   if (!passphrase) {
-    // File is encrypted but no passphrase — try reading as plaintext anyway
-    const text = buf.toString("utf8");
-    try {
-      JSON.parse(text);
-      return text; // Valid JSON, wasn't encrypted
-    } catch {
-      throw new Error("Session file appears encrypted but KEY_PASSPHRASE is not set");
-    }
+    throw new Error("Session payload is encrypted but KEY_PASSPHRASE is not set");
   }
 
-  if (buf.length < HEADER_LEN) {
-    throw new Error("Session file too short to be encrypted");
-  }
+  const buf = Buffer.from(stored.slice(CIPHER_PREFIX.length), "base64");
+  if (buf.length < HEADER_LEN) throw new Error("Session payload truncated");
 
   const salt = buf.subarray(0, 16);
   const iv = buf.subarray(16, 28);
   const tag = buf.subarray(28, 44);
   const data = buf.subarray(44);
 
-  const key = scryptSync(passphrase, salt, 32);
+  const key = deriveKey(passphrase, salt);
   const decipher = createDecipheriv("aes-256-gcm", key, iv);
   decipher.setAuthTag(tag);
 
-  const plainBuf = Buffer.concat([decipher.update(data), decipher.final()]);
-  const json = plainBuf.toString("utf8");
-
-  // Wipe sensitive buffers
-  zeroBuffer(plainBuf);
-  zeroBuffer(key as Buffer);
-
+  const plain = Buffer.concat([decipher.update(data), decipher.final()]);
+  const json = plain.toString("utf8");
+  zeroBuffer(plain);
   return json;
 }
 
-/**
- * Check if session encryption is available (passphrase configured).
- */
 export function isSessionEncryptionEnabled(): boolean {
   return !!getPassphrase();
 }

@@ -1,6 +1,7 @@
 import { URL } from "url";
 import dns from "dns/promises";
 import net from "net";
+import type { LookupFunction } from "net";
 
 /**
  * SSRF Guard — blocks outbound requests to private IPs, cloud metadata,
@@ -166,4 +167,39 @@ export function quickSSRFCheck(rawUrl: string): SSRFCheckResult {
   }
 
   return { allowed: true };
+}
+
+/**
+ * Build a `lookup`-compatible function that validates every address returned
+ * by the resolver and refuses private ranges. Use this when handing the URL
+ * to `http.request`/`https.request`/`fetch` so the same address checked by
+ * `checkSSRF` is the one the socket actually connects to.
+ *
+ * This closes the TOCTOU window between DNS pre-flight and connect.
+ */
+export function safeLookup(): LookupFunction {
+  return ((hostname, options, cb) => {
+    const callback = typeof options === "function" ? options : cb;
+    const opts = typeof options === "function" ? {} : (options ?? {});
+    // Resolve both families, then filter private before handing one back.
+    Promise.all([
+      dns.resolve4(hostname).catch(() => [] as string[]),
+      dns.resolve6(hostname).catch(() => [] as string[]),
+    ]).then(([v4, v6]) => {
+      const candidates: { address: string; family: number }[] = [
+        ...v4.map(a => ({ address: a, family: 4 })),
+        ...v6.map(a => ({ address: a, family: 6 })),
+      ];
+      const safe = candidates.filter(c => !isPrivateIP(c.address));
+      if (safe.length === 0) {
+        (callback as any)(new Error(`SSRF block: ${hostname} has no public addresses`));
+        return;
+      }
+      const all = (opts as any).all;
+      if (all) (callback as any)(null, safe);
+      else (callback as any)(null, safe[0].address, safe[0].family);
+    }).catch((err) => {
+      (callback as any)(err);
+    });
+  }) as LookupFunction;
 }

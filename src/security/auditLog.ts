@@ -355,6 +355,25 @@ class AuditLogger {
     db.prepare("DELETE FROM audit_events").run();
     this.lastHash = "GENESIS";
   }
+
+  /**
+   * Delete audit events older than `retentionDays`. Re-seeds the hash-chain
+   * head from the newest surviving event so the chain remains continuous
+   * for future inserts (older links are archived out-of-band).
+   *
+   * Returns the number of rows deleted.
+   */
+  pruneOlderThan(retentionDays: number): number {
+    if (!Number.isFinite(retentionDays) || retentionDays <= 0) return 0;
+    const db = getDb();
+    const cutoff = Date.now() - retentionDays * 24 * 3_600_000;
+    const info = db.prepare("DELETE FROM audit_events WHERE ts < ?").run(cutoff);
+    const head = db
+      .prepare("SELECT hash FROM audit_events ORDER BY ts DESC, rowid DESC LIMIT 1")
+      .get() as any;
+    this.lastHash = head?.hash ?? "GENESIS";
+    return info.changes ?? 0;
+  }
 }
 
 export const auditLogger = new AuditLogger();

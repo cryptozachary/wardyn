@@ -149,6 +149,37 @@ function migrate(db: Database.Database): void {
     );
   `);
 
+  // Loop guard state (survives restarts so circuit breakers aren't reset
+  // by a crash or redeploy)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS loop_guard_state (
+      session_id  TEXT PRIMARY KEY,
+      state       TEXT NOT NULL,
+      updated_at  INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_loop_guard_updated ON loop_guard_state(updated_at);
+  `);
+
+  // LLM usage metrics (token counts + latency per call)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS llm_usage (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts             INTEGER NOT NULL,
+      provider       TEXT NOT NULL,
+      model          TEXT,
+      session_id     TEXT,
+      channel        TEXT,
+      prompt_tokens  INTEGER,
+      output_tokens  INTEGER,
+      duration_ms    INTEGER,
+      cost_usd       REAL,
+      fallback_used  INTEGER NOT NULL DEFAULT 0,
+      error          TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_llm_usage_ts ON llm_usage(ts);
+    CREATE INDEX IF NOT EXISTS idx_llm_usage_provider ON llm_usage(provider, ts);
+  `);
+
   // Canvas items (agent-pushed UI surface)
   db.exec(`
     CREATE TABLE IF NOT EXISTS canvas_items (

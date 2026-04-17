@@ -55,6 +55,29 @@ export function clearCanvas(sessionId?: string): number {
   return r.changes;
 }
 
+/**
+ * Prune canvas items: delete anything older than `retentionDays`, then cap
+ * total rows at `maxItems` by deleting oldest. Returns rows removed.
+ */
+export function pruneCanvas(retentionDays: number, maxItems: number): number {
+  const db = getDb();
+  let removed = 0;
+  if (retentionDays > 0) {
+    const cutoff = Date.now() - retentionDays * 24 * 3_600_000;
+    removed += db.prepare("DELETE FROM canvas_items WHERE created_at < ?").run(cutoff).changes ?? 0;
+  }
+  if (maxItems > 0) {
+    const row = db.prepare("SELECT COUNT(*) as cnt FROM canvas_items").get() as any;
+    const over = (row?.cnt ?? 0) - maxItems;
+    if (over > 0) {
+      removed += db.prepare(
+        "DELETE FROM canvas_items WHERE id IN (SELECT id FROM canvas_items ORDER BY created_at ASC LIMIT ?)"
+      ).run(over).changes ?? 0;
+    }
+  }
+  return removed;
+}
+
 function mapRow(r: any): CanvasItem {
   let data: unknown;
   try { data = JSON.parse(r.data); } catch { data = r.data; }

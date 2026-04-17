@@ -5,6 +5,12 @@ import { ollamaProvider } from "./providers/ollama.js";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import path from "path";
 import { loadKeys } from "../security/keyVault.js";
+import { recordUsage, isBudgetExceeded } from "./usageStore.js";
+
+export interface CallContext {
+  sessionId?: string;
+  channel?: string;
+}
 
 const providers: Record<string, LLMProvider> = {
   openai: openaiProvider,
@@ -90,14 +96,60 @@ export function getProvider(name?: string): LLMProvider {
  * If the primary provider fails, tries each fallback provider in order.
  * Logs which provider was used on fallback.
  */
-export async function callLLM(payload: CallPayload, apiKey: string, providerName?: string): Promise<LLMResponse> {
+export async function callLLM(
+  payload: CallPayload,
+  apiKey: string,
+  providerName?: string,
+  ctx?: CallContext,
+): Promise<LLMResponse> {
   const primaryName = providerName || getProviderName();
   const provider = providers[primaryName];
   if (!provider) throw new Error(`Unknown LLM provider: "${primaryName}"`);
 
+  // Enforce optional daily budget (set via LLM_DAILY_BUDGET_USD).
+  if (isBudgetExceeded()) {
+    throw new Error("LLM daily budget exceeded — refusing new calls. Raise LLM_DAILY_BUDGET_USD or wait for rollover.");
+  }
+
+  const trace = (
+    name: string,
+    fallback: boolean,
+    fn: () => Promise<LLMResponse>,
+  ): Promise<LLMResponse> => {
+    const started = Date.now();
+    return fn().then(
+      (res) => {
+        recordUsage({
+          ts: started,
+          provider: name,
+          model: res.usage?.model,
+          sessionId: ctx?.sessionId,
+          channel: ctx?.channel,
+          promptTokens: res.usage?.promptTokens,
+          outputTokens: res.usage?.outputTokens,
+          durationMs: Date.now() - started,
+          fallbackUsed: fallback,
+        });
+        return res;
+      },
+      (err) => {
+        recordUsage({
+          ts: started,
+          provider: name,
+          sessionId: ctx?.sessionId,
+          channel: ctx?.channel,
+          durationMs: Date.now() - started,
+          fallbackUsed: fallback,
+          error: (err?.message ?? String(err)).slice(0, 400),
+        });
+        throw err;
+      },
+    );
+  };
+
   // Try primary provider first
   try {
-    return await provider.callLLM(payload, apiKey);
+    return await trace(primaryName, false, () => provider.callLLM(payload, apiKey));
   } catch (primaryErr: any) {
     // If a specific provider was requested, don't fallback
     if (providerName) {
@@ -135,7 +187,7 @@ export async function callLLM(payload: CallPayload, apiKey: string, providerName
 
       try {
         console.warn(`[router] Trying fallback provider: ${fbName}`);
-        const result = await fbProvider.callLLM(payload, fbKey);
+        const result = await trace(fbName, true, () => fbProvider.callLLM(payload, fbKey));
         console.warn(`[router] Fallback ${fbName} succeeded`);
         return result;
       } catch (fbErr: any) {

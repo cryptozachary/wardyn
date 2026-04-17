@@ -1,4 +1,5 @@
 import { createHash } from "crypto";
+import { getDb } from "../db.js";
 
 /**
  * Loop Guard — SHA-256 based tool call dedup with circuit breaker.
@@ -51,26 +52,78 @@ function hashCall(toolName: string, args: Record<string, unknown>): string {
   return createHash("sha256").update(payload).digest("hex").slice(0, 16);
 }
 
-// Per-session circuit states
+// Per-session circuit states (in-memory cache, hydrated from SQLite)
 const sessions = new Map<string, CircuitState>();
+const dirty = new Set<string>();
 
-// Cleanup stale sessions every 5 minutes
+function serializeState(s: CircuitState): string {
+  return JSON.stringify({
+    calls: Array.from(s.calls.entries()),
+    totalCalls: s.totalCalls,
+    tripCount: s.tripCount,
+    trippedAt: s.trippedAt,
+  });
+}
+
+function deserializeState(raw: string): CircuitState {
+  const obj = JSON.parse(raw);
+  return {
+    calls: new Map(obj.calls ?? []),
+    totalCalls: obj.totalCalls ?? 0,
+    tripCount: obj.tripCount ?? 0,
+    trippedAt: obj.trippedAt ?? null,
+  };
+}
+
+function persist(sessionId: string, state: CircuitState): void {
+  try {
+    getDb().prepare(
+      "INSERT INTO loop_guard_state (session_id, state, updated_at) VALUES (?, ?, ?) " +
+      "ON CONFLICT(session_id) DO UPDATE SET state = excluded.state, updated_at = excluded.updated_at"
+    ).run(sessionId, serializeState(state), Date.now());
+  } catch {}
+}
+
+function loadFromDb(sessionId: string): CircuitState | null {
+  try {
+    const row = getDb().prepare("SELECT state FROM loop_guard_state WHERE session_id = ?").get(sessionId) as any;
+    if (row?.state) return deserializeState(row.state);
+  } catch {}
+  return null;
+}
+
+// Flush dirty states + cleanup every 5 minutes
 setInterval(() => {
+  for (const sid of dirty) {
+    const state = sessions.get(sid);
+    if (state) persist(sid, state);
+  }
+  dirty.clear();
+
   const now = Date.now();
   for (const [sid, state] of sessions) {
     if (now - (state.trippedAt ?? 0) > 600_000 && state.totalCalls === 0) {
       sessions.delete(sid);
     }
   }
+  // Drop stale DB rows (7 days untouched)
+  try {
+    getDb().prepare("DELETE FROM loop_guard_state WHERE updated_at < ?")
+      .run(now - 7 * 24 * 3_600_000);
+  } catch {}
 }, 300_000).unref();
 
 function getSession(sessionId: string): CircuitState {
   let state = sessions.get(sessionId);
   if (!state) {
-    state = { calls: new Map(), totalCalls: 0, tripCount: 0, trippedAt: null };
+    state = loadFromDb(sessionId) ?? { calls: new Map(), totalCalls: 0, tripCount: 0, trippedAt: null };
     sessions.set(sessionId, state);
   }
   return state;
+}
+
+function markDirty(sessionId: string): void {
+  dirty.add(sessionId);
 }
 
 function pruneExpired(state: CircuitState, config: LoopGuardConfig): void {
@@ -119,6 +172,7 @@ export function checkLoop(
   if (state.totalCalls >= cfg.maxTotalCalls) {
     state.tripCount++;
     state.trippedAt = now;
+    markDirty(sessionId);
     return {
       allowed: false,
       reason: `Total call limit exceeded (${state.totalCalls}/${cfg.maxTotalCalls} in ${cfg.windowMs / 1000}s window). Circuit breaker tripped.`,
@@ -138,6 +192,7 @@ export function checkLoop(
     if (existing.count > cfg.maxDuplicates) {
       state.tripCount++;
       state.trippedAt = now;
+      markDirty(sessionId);
       return {
         allowed: false,
         reason: `Duplicate call detected: ${toolName} called ${existing.count} times with same args. Circuit breaker tripped.`,
@@ -150,6 +205,7 @@ export function checkLoop(
     state.totalCalls++;
   }
 
+  markDirty(sessionId);
   return {
     allowed: true,
     duplicateCount: existing?.count ?? 1,
@@ -160,6 +216,9 @@ export function checkLoop(
 /** Reset loop guard state for a session */
 export function resetLoopGuard(sessionId: string): void {
   sessions.delete(sessionId);
+  try {
+    getDb().prepare("DELETE FROM loop_guard_state WHERE session_id = ?").run(sessionId);
+  } catch {}
 }
 
 /** Get loop guard stats for a session */
