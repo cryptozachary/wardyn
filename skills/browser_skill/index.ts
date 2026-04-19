@@ -1,4 +1,5 @@
-import { chromium, Browser, BrowserContext, Page } from "playwright";
+import { chromium } from "playwright";
+import type { Browser, BrowserContext, Page } from "playwright";
 import { promises as fs } from "fs";
 import path from "path";
 import { URL } from "url";

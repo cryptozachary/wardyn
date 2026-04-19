@@ -29,7 +29,10 @@ export function loadSkills(root = resolveSkillsRoot()): SkillMeta[] {
         const tsPath = path.join(skillPath, "index.ts");
         if (existsSync(jsPath)) ({ execute, parameters, secrets } = require(jsPath));
         else if (existsSync(tsPath)) ({ execute, parameters, secrets } = require(tsPath));
-      } catch {}
+      } catch (err: any) {
+        // Surface load failures so skills don't silently register as "Tool not found".
+        console.error(`[skills] failed to load ${dir.name}: ${err?.message ?? err}`);
+      }
       let description = `Skill at ${dir.name}`;
       const mdPath = path.join(skillPath, "SKILL.md");
       if (existsSync(mdPath)) {

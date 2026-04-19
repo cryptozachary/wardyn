@@ -345,9 +345,12 @@ async function boot() {
   const APP_ROOT = app.isPackaged
     ? path.join(process.resourcesPath, "app")
     : path.resolve(process.cwd());
+  // Dev mode points at dist/skills (compiled), not raw skills/, because skill
+  // sources use `.js` relative imports that only resolve against the compiled
+  // tree. `npm run electron` runs `npm run build` first, so dist/skills exists.
   const SKILLS_ROOT = app.isPackaged
     ? path.join(process.resourcesPath, "skills")
-    : path.join(process.cwd(), "skills");
+    : path.join(process.cwd(), "dist", "skills");
 
   const env: NodeJS.ProcessEnv = {
     ...process.env,
