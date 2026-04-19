@@ -20,7 +20,7 @@
  *      the resulting cookie into the main BrowserWindow's session, then
  *      load http://127.0.0.1:PORT/ui/.
  */
-import { app, BrowserWindow, ipcMain, session } from "electron";
+import { app, BrowserWindow, Menu, ipcMain, session } from "electron";
 import { spawn, spawnSync, ChildProcess } from "child_process";
 import { randomBytes } from "crypto";
 import { existsSync, promises as fs, openSync } from "fs";
@@ -378,6 +378,32 @@ async function boot() {
   await waitForHealth(gatewayChild);
   const cookies = await loginAndCaptureCookies(apiToken);
   await injectCookies(cookies);
+
+  // Bar stays hidden (autoHideMenuBar) but accelerators like Ctrl+Q / Cmd+Q
+  // and reload/devtools still fire. Without a Menu set, the app has no way
+  // to quit besides clicking the window's X.
+  Menu.setApplicationMenu(Menu.buildFromTemplate([
+    {
+      label: "File",
+      submenu: [
+        { role: "quit" },
+      ],
+    },
+    {
+      label: "View",
+      submenu: [
+        { role: "reload" },
+        { role: "forceReload" },
+        { role: "toggleDevTools" },
+        { type: "separator" },
+        { role: "resetZoom" },
+        { role: "zoomIn" },
+        { role: "zoomOut" },
+        { type: "separator" },
+        { role: "togglefullscreen" },
+      ],
+    },
+  ]));
 
   mainWindow = new BrowserWindow({
     width: 1280,
