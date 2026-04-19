@@ -66,6 +66,7 @@ let gatewayChild: ChildProcess | null = null;
 let mainWindow: BrowserWindow | null = null;
 let setupWindow: BrowserWindow | null = null;
 let unlockWindow: BrowserWindow | null = null;
+let loadingWindow: BrowserWindow | null = null;
 let booting = true;
 let shuttingDown = false;
 let restartCount = 0;
@@ -152,6 +153,34 @@ async function showUnlockWindow(): Promise<string> {
       if (unlockWindow) reject(new CancelledError("Unlock cancelled"));
     });
   });
+}
+
+function showLoadingWindow(): BrowserWindow {
+  const win = new BrowserWindow({
+    width: 420,
+    height: 320,
+    title: "Wardyn",
+    icon: APP_ICON,
+    frame: false,
+    resizable: false,
+    movable: true,
+    skipTaskbar: false,
+    autoHideMenuBar: true,
+    show: false,
+    webPreferences: {
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
+    },
+  });
+  win.loadFile(path.join(__dirname, "loading.html"));
+  win.once("ready-to-show", () => win.show());
+  return win;
+}
+
+function closeLoadingWindow() {
+  if (loadingWindow && !loadingWindow.isDestroyed()) loadingWindow.close();
+  loadingWindow = null;
 }
 
 function waitForHealth(child: ChildProcess, timeoutMs = 20_000): Promise<void> {
@@ -342,6 +371,11 @@ async function boot() {
     cookieSecret = bootstrap.cookieSecret;
   }
 
+  // Show a splash as soon as the passphrase is accepted; gateway spawn +
+  // /health wait can take several seconds, during which the user would
+  // otherwise see nothing.
+  loadingWindow = showLoadingWindow();
+
   const APP_ROOT = app.isPackaged
     ? path.join(process.resourcesPath, "app")
     : path.resolve(process.cwd());
@@ -413,7 +447,12 @@ async function boot() {
     title: "Wardyn",
     icon: APP_ICON,
     autoHideMenuBar: true,
+    show: false,
     webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false },
+  });
+  mainWindow.once("ready-to-show", () => {
+    mainWindow?.show();
+    closeLoadingWindow();
   });
   await mainWindow.loadURL(`http://${HOST}:${PORT}/ui/hub.html`);
   booting = false;
@@ -424,6 +463,7 @@ async function boot() {
 }
 
 app.whenReady().then(boot).catch((err) => {
+  closeLoadingWindow();
   if (err instanceof CancelledError) {
     // User closed the setup/unlock window before finishing — quit silently.
     app.quit();

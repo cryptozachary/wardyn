@@ -27,6 +27,7 @@ skills_pending/
 # Logs
 logs/
 gateway.log
+docs/
 
 .claude
 # OS / editor
