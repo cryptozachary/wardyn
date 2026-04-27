@@ -38,6 +38,9 @@ Thumbs.db
 
 # Database (SQLite runtime data)
 data/
+secureclaw.db
+secureclaw.db-shm
+secureclaw.db-wal
 
 # Agent output (generated images, screenshots, scraped files)
 output/
