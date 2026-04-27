@@ -7,8 +7,10 @@
     :root { color-scheme: dark; }
     html, body { height: 100%; margin: 0; }
     body {
+      
+      min-height: fit-content;
       font-family: system-ui, sans-serif;
-      background: #111;
+      background: #111827;
       color: #eee;
       display: flex;
       flex-direction: column;
@@ -18,13 +20,14 @@
       -webkit-user-drag: none;
     }
     img {
-      max-width: 260px;
+      max-width: 560px;
       width: 70%;
-      height: auto;
       -webkit-user-drag: none;
+      border-radius: 10px;
     }
     .status {
       margin-top: 22px;
+      margin-bottom: 22px;
       font-size: 13px;
       color: #aaa;
       letter-spacing: 0.3px;

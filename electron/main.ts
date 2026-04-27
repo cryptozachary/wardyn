@@ -158,7 +158,7 @@ async function showUnlockWindow(): Promise<string> {
 function showLoadingWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 420,
-    height: 320,
+    height: 520,
     title: "Wardyn",
     icon: APP_ICON,
     frame: false,
