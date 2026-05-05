@@ -44,6 +44,8 @@ Open `http://127.0.0.1:3000/login` and sign in with the `API_TOKEN`.
 | `LLM_DAILY_BUDGET_USD` | no | — | If set, LLM calls are refused once the last 24h of `llm_usage` rows exceed this budget. |
 | `WARDYN_AUTOUPDATE` | no | on (packaged) | Set to `0` to disable Electron auto-update checks. |
 | `WARDYN_UPDATE_URL` | no | `publish` in package.json | Override the update feed URL at runtime. |
+| `WARDYN_ALLOWED_ORIGINS` | no | loopback only | Comma-separated extra Origins permitted to open cookie-auth WebSockets. Default allows `http(s)://{HOST,127.0.0.1,localhost}:{PORT,ADMIN_PORT}` plus `file://` (Electron). Token-auth WS connections bypass this check. |
+| `WHATSAPP_ENABLED` | no | off | Set to `1` to start the WhatsApp adapter. **Read the WhatsApp note below before enabling.** |
 
 ## Auth model
 
@@ -254,6 +256,38 @@ Features that matter for single-operator production use:
   a broken archive never lands in your rotation.
 - **Heartbeat safety** — smart-mode triage prompts are scanned through
   SafetySpine before execution; blocks are routed to the audit log.
+
+## Channels — caveats
+
+### WhatsApp (`WHATSAPP_ENABLED=1`)
+
+The WhatsApp adapter uses [`baileys`](https://github.com/WhiskeySockets/Baileys),
+a reverse-engineered WhatsApp Web client. **It is not an official Meta API.**
+Connecting an account this way violates the WhatsApp Terms of Service and the
+account may be banned without warning. Use it only on a throwaway number for
+personal automation. For anything load-bearing, switch to the official
+WhatsApp Cloud API (not currently wired up).
+
+Telegram, Discord, and Slack all use first-party APIs and are not subject to
+this caveat.
+
+## Operations
+
+### Audit chain
+
+The audit log is a SHA-256 hash chain (`prev_hash` → `hash`) so any tampering
+or row deletion is detectable via `GET /api/security/verify-chain`. If the
+chain is reported as broken (e.g. after a migration that touched
+`audit_events` directly, or a backfill), rebuild it from genesis with:
+
+```bash
+npm run doctor -- --reseed-audit
+```
+
+Reseed rewrites every `prev_hash`/`hash` so future inserts continue from a
+valid head. **It destroys the historical attestation** for prior events —
+export the old log via `GET /api/security/export` first if you need it for
+forensics.
 
 ## Tests
 

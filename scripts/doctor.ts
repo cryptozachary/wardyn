@@ -7,6 +7,7 @@
  *
  *   npm run doctor
  *   npm run doctor -- --json
+ *   npm run doctor -- --reseed-audit   # rewrites the audit chain from GENESIS
  */
 import { existsSync, statSync, readdirSync, readFileSync } from "fs";
 import path from "path";
@@ -37,6 +38,13 @@ function fmtBytes(n: number): string {
 
 async function main() {
   const cwd = process.cwd();
+
+  if (process.argv.includes("--reseed-audit")) {
+    const { fixed, total } = auditLogger.reseedChain();
+    console.log(`audit chain reseed: rewrote ${fixed}/${total} event(s) from GENESIS`);
+    closeDb();
+    process.exit(0);
+  }
 
   await check("working dir", () => {
     const pkg = path.join(cwd, "package.json");
@@ -122,10 +130,15 @@ async function main() {
   });
 
   await check("signing keypair", () => {
-    const priv = path.join(cwd, "config", "signing_key.pem");
-    const pub = path.join(cwd, "config", "signing_key.pub");
-    if (!existsSync(priv) || !existsSync(pub)) return { level: "warn", detail: "not generated (gateway creates on first boot)" };
-    return { level: "ok", detail: "Ed25519 keypair present" };
+    const pp = process.env.KEY_PASSPHRASE;
+    if (!pp) return { level: "warn", detail: "KEY_PASSPHRASE not set — cannot inspect vault" };
+    try {
+      const keys = loadKeys(pp);
+      const hasPriv = !!keys["_signing:private"];
+      const hasPub = !!keys["_signing:public"];
+      if (hasPriv && hasPub) return { level: "ok", detail: "Ed25519 keypair in vault" };
+      return { level: "warn", detail: "not generated (gateway creates on first boot)" };
+    } catch (e: any) { return { level: "fail", detail: `vault read failed: ${e.message}` }; }
   });
 
   await check("memory files", () => {

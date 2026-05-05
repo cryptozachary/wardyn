@@ -44,6 +44,47 @@ function parseCookies(header: string | undefined): Record<string, string> {
   return out;
 }
 
+/**
+ * Cookie-auth WebSocket connections need an explicit Origin allowlist —
+ * cookies are auto-attached cross-site and SameSite=Strict does not apply
+ * to WebSockets, so without this check a malicious page can hijack a
+ * logged-in admin's session (CSWSH).
+ *
+ * Token-auth (header / query) connections skip this since the caller had
+ * to know the secret to attach it.
+ */
+function buildAllowedOrigins(): Set<string> {
+  const allowed = new Set<string>();
+  const explicit = (process.env.WARDYN_ALLOWED_ORIGINS || "")
+    .split(",").map(s => s.trim()).filter(Boolean);
+  for (const o of explicit) allowed.add(o.toLowerCase());
+
+  const host = process.env.HOST || "127.0.0.1";
+  const port = process.env.PORT || "3000";
+  const adminPort = process.env.ADMIN_PORT;
+  const hosts = new Set([host, "127.0.0.1", "localhost"]);
+  for (const h of hosts) {
+    allowed.add(`http://${h}:${port}`);
+    allowed.add(`https://${h}:${port}`);
+    if (adminPort) {
+      allowed.add(`http://${h}:${adminPort}`);
+      allowed.add(`https://${h}:${adminPort}`);
+    }
+  }
+  return allowed;
+}
+const ALLOWED_ORIGINS = buildAllowedOrigins();
+
+function isOriginAllowed(origin: string | undefined): boolean {
+  // Electron BrowserWindow loading from disk sends `file://`. The desktop
+  // app authenticates via cookie injected post-login, so it lands on this
+  // path; allow it explicitly.
+  if (!origin) return false;
+  const o = origin.toLowerCase();
+  if (o === "null" || o.startsWith("file://")) return true;
+  return ALLOWED_ORIGINS.has(o);
+}
+
 function validateCookieSession(cookieHeader: string | undefined): boolean {
   const secret = process.env.COOKIE_SECRET || process.env.API_TOKEN;
   if (!secret) return false;
@@ -81,6 +122,16 @@ export function attachWebSocket(
       if (!cookieOk && !headerOk && !queryOk) {
         ws.close(4001, "unauthorized");
         return;
+      }
+      // Cookie-only auth must come from an allowlisted origin to defeat
+      // cross-site WebSocket hijacking (CSWSH). Header/query token auth
+      // is exempt because the caller already proved knowledge of a secret.
+      if (cookieOk && !headerOk && !queryOk) {
+        const origin = req.headers.origin as string | undefined;
+        if (!isOriginAllowed(origin)) {
+          ws.close(4003, "origin not allowed");
+          return;
+        }
       }
     } else if (process.env.NODE_ENV === "production") {
       ws.close(4001, "unauthorized");

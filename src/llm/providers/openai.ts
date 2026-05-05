@@ -12,7 +12,7 @@ function getModel(): string {
       if (cfg.openai) return cfg.openai;
     } catch {}
   }
-  return process.env.OPENAI_MODEL || "gpt-4o-mini";
+  return process.env.OPENAI_MODEL || "gpt-5.4";
 }
 
 export const openaiProvider: LLMProvider = {

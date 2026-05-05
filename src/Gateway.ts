@@ -1162,8 +1162,14 @@ initSkillSecrets();
 // Migrate channel secrets from plaintext to encrypted vault
 const channelMigration = migrateChannelSecrets();
 
-// Ensure Ed25519 signing keypair exists
-ensureKeypair();
+// Ensure Ed25519 signing keypair exists (vault-stored; needs KEY_PASSPHRASE).
+// Skip silently in dev installs without a passphrase — sign operations will
+// surface a clearer error when actually invoked.
+try {
+  if (process.env.KEY_PASSPHRASE) ensureKeypair();
+} catch (err: any) {
+  console.warn(`[gateway] signing keypair unavailable: ${err.message}`);
+}
 
 // Clean expired sessions every hour
 setInterval(() => cleanExpiredSessions(), 3_600_000).unref();

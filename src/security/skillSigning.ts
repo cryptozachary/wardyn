@@ -1,6 +1,7 @@
 import { generateKeyPairSync, sign, verify, createHash, KeyObject } from "crypto";
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { readFileSync, existsSync, unlinkSync } from "fs";
 import path from "path";
+import { loadKeys, storeKey } from "./keyVault.js";
 
 /**
  * Ed25519 Signed Skill Manifests
@@ -9,12 +10,36 @@ import path from "path";
  * 1. Who published it (identity via public key)
  * 2. That it hasn't been tampered with (integrity via signature)
  *
- * Keypair is stored in config/signing_key.pem (private) and config/signing_key.pub (public).
+ * Keypair lives in the encrypted provider vault under reserved keys
+ * (`_signing:private`, `_signing:public`) — same AES-256-GCM + scrypt
+ * protection as provider API keys, gated by KEY_PASSPHRASE.
+ *
+ * Pre-vault installs stored PEMs at config/signing_key.pem(.pub); on first
+ * call after upgrade those files are imported into the vault and deleted.
  */
 
 const CONFIG_DIR = path.join(process.cwd(), "config");
-const PRIVATE_KEY_PATH = path.join(CONFIG_DIR, "signing_key.pem");
-const PUBLIC_KEY_PATH = path.join(CONFIG_DIR, "signing_key.pub");
+const LEGACY_PRIVATE_PATH = path.join(CONFIG_DIR, "signing_key.pem");
+const LEGACY_PUBLIC_PATH = path.join(CONFIG_DIR, "signing_key.pub");
+const VAULT_PRIVATE_KEY = "_signing:private";
+const VAULT_PUBLIC_KEY = "_signing:public";
+
+function getPassphrase(): string {
+  const p = process.env.KEY_PASSPHRASE;
+  if (!p) throw new Error("KEY_PASSPHRASE required to access the signing keypair");
+  return p;
+}
+
+function migrateLegacyPemsIfPresent(passphrase: string): void {
+  if (!existsSync(LEGACY_PRIVATE_PATH) || !existsSync(LEGACY_PUBLIC_PATH)) return;
+  const priv = readFileSync(LEGACY_PRIVATE_PATH, "utf8");
+  const pub = readFileSync(LEGACY_PUBLIC_PATH, "utf8");
+  storeKey(VAULT_PRIVATE_KEY, priv, passphrase);
+  storeKey(VAULT_PUBLIC_KEY, pub, passphrase);
+  try { unlinkSync(LEGACY_PRIVATE_PATH); } catch {}
+  try { unlinkSync(LEGACY_PUBLIC_PATH); } catch {}
+  console.log("Migrated legacy signing keypair from disk to encrypted vault");
+}
 
 export interface SkillManifest {
   name: string;
@@ -34,31 +59,42 @@ export interface SignedManifest {
 
 /** Generate a new Ed25519 keypair if one doesn't exist */
 export function ensureKeypair(): { publicKey: string; privateKey: string } {
-  if (existsSync(PRIVATE_KEY_PATH) && existsSync(PUBLIC_KEY_PATH)) {
-    return {
-      privateKey: readFileSync(PRIVATE_KEY_PATH, "utf8"),
-      publicKey: readFileSync(PUBLIC_KEY_PATH, "utf8"),
-    };
+  const passphrase = getPassphrase();
+  migrateLegacyPemsIfPresent(passphrase);
+
+  let vault: Record<string, string>;
+  try {
+    vault = loadKeys(passphrase);
+  } catch {
+    vault = {};
   }
 
-  mkdirSync(CONFIG_DIR, { recursive: true });
+  const existingPriv = vault[VAULT_PRIVATE_KEY];
+  const existingPub = vault[VAULT_PUBLIC_KEY];
+  if (existingPriv && existingPub) {
+    return { privateKey: existingPriv, publicKey: existingPub };
+  }
 
   const { publicKey, privateKey } = generateKeyPairSync("ed25519", {
     publicKeyEncoding: { type: "spki", format: "pem" },
     privateKeyEncoding: { type: "pkcs8", format: "pem" },
   });
 
-  writeFileSync(PRIVATE_KEY_PATH, privateKey, "utf8");
-  writeFileSync(PUBLIC_KEY_PATH, publicKey, "utf8");
-  console.log("Generated new Ed25519 signing keypair");
+  storeKey(VAULT_PRIVATE_KEY, privateKey, passphrase);
+  storeKey(VAULT_PUBLIC_KEY, publicKey, passphrase);
+  console.log("Generated new Ed25519 signing keypair (stored in vault)");
 
   return { publicKey, privateKey };
 }
 
 /** Get the instance's public key (for sharing with peers) */
 export function getPublicKey(): string | null {
-  if (!existsSync(PUBLIC_KEY_PATH)) return null;
-  return readFileSync(PUBLIC_KEY_PATH, "utf8");
+  try {
+    const vault = loadKeys(getPassphrase());
+    return vault[VAULT_PUBLIC_KEY] ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /** Compute SHA-256 hash of skill code */

@@ -47,8 +47,8 @@ export function setProviderName(name: string): void {
 }
 
 const MODEL_DEFAULTS: Record<string, string> = {
-  openai: process.env.OPENAI_MODEL || "gpt-4o-mini",
-  anthropic: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514",
+  openai: process.env.OPENAI_MODEL || "gpt-5.4",
+  anthropic: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6",
 };
 
 export function getModelConfig(): Record<string, string> {

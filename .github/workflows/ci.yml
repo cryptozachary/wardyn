@@ -35,6 +35,9 @@ jobs:
       - name: Integration tests
         run: npx tsx tests/integration.test.ts
 
+      - name: Readiness tests (encryption, retention, cost, SSRF)
+        run: npx tsx tests/readiness.test.ts
+
       - name: Smoke test (boot compiled server)
         env:
           SMOKE_PORT: 18085

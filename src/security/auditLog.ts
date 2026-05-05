@@ -357,6 +357,46 @@ class AuditLogger {
   }
 
   /**
+   * Recompute prev_hash + hash for every event in chronological order,
+   * restarting from GENESIS. Use after a chain break is detected (e.g. from
+   * a botched migration or pre-chain rows imported in a backfill). This
+   * destroys the historical attestation for prior events but restores a
+   * valid chain so future inserts continue to be tamper-evident.
+   *
+   * Returns { fixed, total } so callers can report the impact.
+   */
+  reseedChain(): { fixed: number; total: number } {
+    const db = getDb();
+    const rows = db.prepare("SELECT * FROM audit_events ORDER BY ts ASC, rowid ASC").all() as any[];
+    const update = db.prepare("UPDATE audit_events SET prev_hash = ?, hash = ? WHERE id = ?");
+    let prev = "GENESIS";
+    let fixed = 0;
+    const txn = db.transaction(() => {
+      for (const r of rows) {
+        const evt: AuditEvent = {
+          id: r.id, ts: r.ts, type: r.type, channel: r.channel, sessionId: r.session_id,
+          blockedCommand: r.blocked_command ?? undefined, patternLabel: r.pattern_label ?? undefined,
+          patternIndex: r.pattern_index ?? undefined, toolName: r.tool_name ?? undefined,
+          toolArgs: r.tool_args ? JSON.parse(r.tool_args) : undefined,
+          durationMs: r.duration_ms ?? undefined,
+          success: r.success != null ? !!r.success : undefined,
+          error: r.error ?? undefined,
+          prevHash: prev,
+        };
+        const newHash = hashEvent(evt);
+        if (r.prev_hash !== prev || r.hash !== newHash) {
+          update.run(prev, newHash, r.id);
+          fixed++;
+        }
+        prev = newHash;
+      }
+    });
+    txn();
+    this.lastHash = prev;
+    return { fixed, total: rows.length };
+  }
+
+  /**
    * Delete audit events older than `retentionDays`. Re-seeds the hash-chain
    * head from the newest surviving event so the chain remains continuous
    * for future inserts (older links are archived out-of-band).
