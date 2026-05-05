@@ -2,10 +2,11 @@ import { randomBytes, createCipheriv, scryptSync } from "crypto";
 import { readFileSync, writeFileSync, existsSync, unlinkSync, mkdirSync } from "fs";
 import path from "path";
 import { loadKeys, storeKey } from "./keyVault.js";
+import { paths } from "../paths.js";
 
 const SKILL_PREFIX = "skill:";
-const VAULT_PATH = path.join(process.cwd(), "config", "providers.enc");
-const LEGACY_PATH = path.join(process.cwd(), "config", "skill-secrets.json");
+const VAULT_PATH = paths.config("providers.enc");
+const LEGACY_PATH = paths.config("skill-secrets.json");
 
 type SecretsStore = Record<string, Record<string, string>>;
 

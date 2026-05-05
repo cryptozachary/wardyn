@@ -146,6 +146,11 @@ export function attachWebSocket(
     const rateKey = (req.socket.remoteAddress || "unknown") + ":" + (req.headers["x-forwarded-for"] || "");
     const rateState: RateState = { warned: false };
 
+    // Per-connection abort controller — fires on socket close so any
+    // in-flight agent loop spawned by this client stops promptly.
+    const connAbort = new AbortController();
+    ws.on("close", () => connAbort.abort(new Error("websocket closed")));
+
     ws.on("message", async (raw) => {
       // Rate limit check
       if (!checkWsRate(rateKey)) {
@@ -209,7 +214,8 @@ export function attachWebSocket(
       try {
         const result = await runAgentLoop(msg, skills, getApiKey(), {
           sessionId,
-          onStream
+          onStream,
+          signal: connAbort.signal,
         });
         sendJson(ws, { type: "final", text: result.final, sessionId: result.sessionId });
       } catch (err: any) {

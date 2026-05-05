@@ -14,8 +14,9 @@ import http from "http";
 import https from "https";
 import { createSignedManifest, verifySkillCode } from "../security/skillSigning.js";
 import { getDb } from "../db.js";
+import { paths } from "../paths.js";
 
-const HUB_DIR = path.join(process.cwd(), "hub");
+const HUB_DIR = paths.hub();
 
 function ensureHubDir(): void {
   if (!existsSync(HUB_DIR)) mkdirSync(HUB_DIR, { recursive: true });

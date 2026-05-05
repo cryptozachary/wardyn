@@ -1,9 +1,9 @@
 import axios from "axios";
 import { readFileSync, existsSync } from "fs";
-import path from "path";
 import type { LLMProvider, CallPayload, LLMResponse } from "../types.js";
+import { paths } from "../../paths.js";
 
-const MODELS_PATH = path.join(process.cwd(), "config", "models.json");
+const MODELS_PATH = paths.config("models.json");
 
 function getModel(): string {
   if (existsSync(MODELS_PATH)) {
@@ -44,7 +44,7 @@ export const openaiProvider: LLMProvider = {
           }
         })) : undefined,
         ...(useEffort ? { reasoning_effort: reasoningEffort } : {}),
-      }, { headers: { Authorization: `Bearer ${apiKey}` } });
+      }, { headers: { Authorization: `Bearer ${apiKey}` }, signal: payload.signal });
     } catch (err: any) {
       const detail = err.response?.data?.error?.message || err.response?.data || err.message;
       console.error(`[openai] API error (model=${model}):`, detail);

@@ -11,8 +11,9 @@ import ts from "typescript";
 import { spawn } from "child_process";
 import { writeFileSync, unlinkSync, mkdirSync, existsSync } from "fs";
 import path from "path";
+import { paths } from "../paths.js";
 
-const SANDBOX_DIR = path.join(process.cwd(), "sandbox");
+const SANDBOX_DIR = paths.sandbox();
 
 export interface ASTWarning {
   type: string;

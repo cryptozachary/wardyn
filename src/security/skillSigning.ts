@@ -2,6 +2,7 @@ import { generateKeyPairSync, sign, verify, createHash, KeyObject } from "crypto
 import { readFileSync, existsSync, unlinkSync } from "fs";
 import path from "path";
 import { loadKeys, storeKey } from "./keyVault.js";
+import { paths } from "../paths.js";
 
 /**
  * Ed25519 Signed Skill Manifests
@@ -18,9 +19,8 @@ import { loadKeys, storeKey } from "./keyVault.js";
  * call after upgrade those files are imported into the vault and deleted.
  */
 
-const CONFIG_DIR = path.join(process.cwd(), "config");
-const LEGACY_PRIVATE_PATH = path.join(CONFIG_DIR, "signing_key.pem");
-const LEGACY_PUBLIC_PATH = path.join(CONFIG_DIR, "signing_key.pub");
+const LEGACY_PRIVATE_PATH = paths.config("signing_key.pem");
+const LEGACY_PUBLIC_PATH = paths.config("signing_key.pub");
 const VAULT_PRIVATE_KEY = "_signing:private";
 const VAULT_PUBLIC_KEY = "_signing:public";
 

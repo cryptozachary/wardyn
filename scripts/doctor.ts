@@ -18,6 +18,7 @@ import { loadKeys } from "../src/security/keyVault.js";
 import { loadChannelConfig } from "../src/channels/channelConfig.js";
 import { loadSkills } from "../src/skills/loader.js";
 import { getProviderName, getModelConfig } from "../src/llm/router.js";
+import { getHeartbeatHealth } from "../src/orchestrator/heartbeat.js";
 
 dotenv.config();
 
@@ -175,6 +176,22 @@ async function main() {
     if (!existsSync(d)) return { level: "ok", detail: "not yet created" };
     const files = readdirSync(d).length;
     return { level: "ok", detail: `${files} pending upload(s)` };
+  });
+
+  await check("heartbeat liveness", () => {
+    // getHeartbeatHealth tracks state in the gateway's running process. The
+    // doctor is a separate process so it sees an empty map; this check is
+    // primarily useful when the gateway routes /api/heartbeat/health, but
+    // we still surface a friendly status.
+    try {
+      const jobs = getHeartbeatHealth();
+      if (jobs.length === 0) return { level: "ok", detail: "no in-process job runs yet — query /api/heartbeat/health on the live gateway" };
+      const stalled = jobs.filter(j => j.stalled);
+      if (stalled.length > 0) {
+        return { level: "warn", detail: `${stalled.length} stalled: ${stalled.map(s => `${s.name} (${s.stallReason})`).join("; ")}` };
+      }
+      return { level: "ok", detail: `${jobs.length} job(s) tracked, none stalled` };
+    } catch (e: any) { return { level: "warn", detail: e.message }; }
   });
 
   await check("quota tracker", () => {

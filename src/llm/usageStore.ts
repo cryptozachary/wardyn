@@ -8,9 +8,9 @@
  */
 
 import { existsSync, readFileSync } from "fs";
-import path from "path";
 import { getDb } from "../db.js";
 import { getSettingNumber } from "../security/settingsStore.js";
+import { paths } from "../paths.js";
 
 export interface UsageRecord {
   ts: number;
@@ -73,7 +73,7 @@ let priceCache: Record<string, PriceRow> | null = null;
 function getPrices(): Record<string, PriceRow> {
   if (priceCache) return priceCache;
   priceCache = { ...DEFAULT_PRICES };
-  const custom = path.join(process.cwd(), "config", "llm-pricing.json");
+  const custom = paths.config("llm-pricing.json");
   if (existsSync(custom)) {
     try {
       const raw = JSON.parse(readFileSync(custom, "utf8"));

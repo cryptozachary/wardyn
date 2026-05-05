@@ -1,9 +1,10 @@
 import { readdirSync, readFileSync, statSync, existsSync } from "fs";
 import path from "path";
+import { paths } from "../paths.js";
 
-const SESSIONS_DIR = path.join(process.cwd(), "sessions");
-const LOGS_DIR = path.join(process.cwd(), "logs");
-const MEMORY_DIR = path.join(process.cwd(), "memory");
+const SESSIONS_DIR = paths.sessions();
+const LOGS_DIR = paths.logs();
+const MEMORY_DIR = paths.memory();
 
 export interface ContextSnapshot {
   timestamp: number;

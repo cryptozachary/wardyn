@@ -39,6 +39,95 @@ function logTriage(entry: TriageLogEntry): void {
   } catch {}
 }
 
+/* ────────── Stall tracker ────────── */
+
+interface JobHealth {
+  intervalMs: number;
+  lastRunTs: number | null;
+  lastSuccessTs: number | null;
+  lastErrorTs: number | null;
+  lastError: string | null;
+  consecutiveFailures: number;
+}
+const jobHealth = new Map<string, JobHealth>();
+
+function recordRun(name: string, intervalMs: number, ok: boolean, error?: string): void {
+  const cur = jobHealth.get(name) ?? {
+    intervalMs, lastRunTs: null, lastSuccessTs: null, lastErrorTs: null,
+    lastError: null, consecutiveFailures: 0,
+  };
+  cur.intervalMs = intervalMs;
+  cur.lastRunTs = Date.now();
+  if (ok) {
+    cur.lastSuccessTs = cur.lastRunTs;
+    cur.consecutiveFailures = 0;
+    cur.lastError = null;
+  } else {
+    cur.lastErrorTs = cur.lastRunTs;
+    cur.lastError = error ?? "unknown";
+    cur.consecutiveFailures++;
+  }
+  jobHealth.set(name, cur);
+}
+
+export interface HeartbeatJobStatus {
+  name: string;
+  intervalMs: number;
+  lastRunTs: number | null;
+  lastSuccessTs: number | null;
+  lastErrorTs: number | null;
+  lastError: string | null;
+  consecutiveFailures: number;
+  stalled: boolean;
+  stallReason?: string;
+}
+
+const STALL_INTERVAL_FACTOR = Number(process.env.HEARTBEAT_STALL_FACTOR) || 3;
+const STALL_FAILURE_THRESHOLD = Number(process.env.HEARTBEAT_STALL_FAILURES) || 5;
+
+/**
+ * Snapshot of per-job liveness. A job is `stalled` when either:
+ *   - it has never produced a successful run AND missed at least one tick, or
+ *   - the last success is older than `intervalMs * STALL_INTERVAL_FACTOR`, or
+ *   - it has failed `STALL_FAILURE_THRESHOLD` consecutive times.
+ *
+ * Override the thresholds via HEARTBEAT_STALL_FACTOR / HEARTBEAT_STALL_FAILURES.
+ */
+export function getHeartbeatHealth(): HeartbeatJobStatus[] {
+  const now = Date.now();
+  const out: HeartbeatJobStatus[] = [];
+  for (const [name, h] of jobHealth) {
+    let stalled = false;
+    let reason: string | undefined;
+    if (h.consecutiveFailures >= STALL_FAILURE_THRESHOLD) {
+      stalled = true;
+      reason = `${h.consecutiveFailures} consecutive failures`;
+    } else if (h.lastSuccessTs == null && h.lastRunTs != null) {
+      stalled = true;
+      reason = `no successful run yet (${h.consecutiveFailures} failure(s))`;
+    } else if (h.lastSuccessTs != null) {
+      const since = now - h.lastSuccessTs;
+      const limit = h.intervalMs * STALL_INTERVAL_FACTOR;
+      if (since > limit) {
+        stalled = true;
+        reason = `last success ${Math.round(since / 60_000)}m ago (>${STALL_INTERVAL_FACTOR}× interval)`;
+      }
+    }
+    out.push({
+      name,
+      intervalMs: h.intervalMs,
+      lastRunTs: h.lastRunTs,
+      lastSuccessTs: h.lastSuccessTs,
+      lastErrorTs: h.lastErrorTs,
+      lastError: h.lastError,
+      consecutiveFailures: h.consecutiveFailures,
+      stalled,
+      ...(reason ? { stallReason: reason } : {}),
+    });
+  }
+  return out;
+}
+
 /* ────────── cron_skill integration ────────── */
 
 let checkDueJobsFn: (() => Promise<any[]>) | null = null;
@@ -306,6 +395,7 @@ async function executeFixedJob(
   onResult?: (job: HeartbeatJob, result: any) => void
 ) {
   const startMs = Date.now();
+  const intervalMs = parseCron(job.cron).intervalMs;
   const msg: Message = {
     id: `hb-${randomUUID()}`,
     channel: "heartbeat",
@@ -321,8 +411,10 @@ async function executeFixedJob(
       sessionId: `heartbeat-${job.name}`
     });
     onResult?.(job, result);
+    recordRun(job.name, intervalMs, true);
   } catch (err: any) {
     error = err.message;
+    recordRun(job.name, intervalMs, false, error);
     throw err;
   } finally {
     logTriage({
@@ -347,6 +439,7 @@ async function executeSmartJob(
   onResult?: (job: HeartbeatJob, result: any) => void
 ) {
   const startMs = Date.now();
+  const intervalMs = parseCron(job.cron).intervalMs;
 
   // Phase 1: Triage
   console.log(`Heartbeat "${job.name}": scanning context...`);
@@ -363,6 +456,8 @@ async function executeSmartJob(
       prompt: null,
       durationMs: Date.now() - startMs,
     });
+    // No action is a successful triage outcome — clear stall state.
+    recordRun(job.name, intervalMs, true);
     onResult?.(job, { final: null, skipped: true, reason: triage.reason });
     return;
   }
@@ -413,8 +508,10 @@ async function executeSmartJob(
       sessionId: `heartbeat-${job.name}`
     });
     onResult?.(job, { ...result, triageReason: triage.reason });
+    recordRun(job.name, intervalMs, true);
   } catch (err: any) {
     error = err.message;
+    recordRun(job.name, intervalMs, false, error);
     throw err;
   } finally {
     logTriage({

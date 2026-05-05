@@ -1,9 +1,9 @@
 import axios from "axios";
 import { readFileSync, existsSync } from "fs";
-import path from "path";
 import type { LLMProvider, CallPayload, LLMResponse } from "../types.js";
+import { paths } from "../../paths.js";
 
-const CONFIG_PATH = path.join(process.cwd(), "config", "ollama.json");
+const CONFIG_PATH = paths.config("ollama.json");
 
 function getConfig(): { url: string; model: string } {
   // Config file takes priority, then env vars, then defaults
@@ -39,7 +39,7 @@ export const ollamaProvider: LLMProvider = {
           parameters: t.parameters ?? { type: "object", properties: {}, additionalProperties: true }
         }
       })) : undefined
-    }, { timeout: 120_000 });
+    }, { timeout: 120_000, signal: payload.signal });
 
     const choice = res.data.choices[0].message;
     if (choice.tool_calls?.length) {

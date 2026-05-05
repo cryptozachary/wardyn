@@ -1,21 +1,57 @@
 import { randomUUID } from "crypto";
+import os from "os";
 
 type Level = "debug" | "info" | "warn" | "error";
 const LEVELS: Record<Level, number> = { debug: 10, info: 20, warn: 30, error: 40 };
 const CURRENT = (process.env.LOG_LEVEL as Level) || "info";
 const CURRENT_NUM = LEVELS[CURRENT] ?? 20;
 
+// LOG_FORMAT: "json" (default — shipper-friendly, one record per line) or
+// "pretty" (human-readable for terminal use). Each JSON record carries
+// service/pid/hostname so logs from multiple Wardyn processes can be
+// disambiguated by Loki/Datadog/etc.
+const FORMAT: "json" | "pretty" = (process.env.LOG_FORMAT === "pretty" ? "pretty" : "json");
+const SERVICE = process.env.LOG_SERVICE || "wardyn";
+const HOSTNAME = os.hostname();
+const PID = process.pid;
+
 function shouldLog(level: Level): boolean { return LEVELS[level] >= CURRENT_NUM; }
+
+const COLORS: Record<Level, string> = {
+  debug: "\x1b[2m", info: "\x1b[36m", warn: "\x1b[33m", error: "\x1b[31m",
+};
+const RESET = "\x1b[0m";
+
+function formatPretty(level: Level, msg: string, fields: Record<string, unknown> | undefined, ts: string): string {
+  const tag = `${COLORS[level]}${level.toUpperCase().padEnd(5)}${RESET}`;
+  const head = `${ts.slice(11, 23)} ${tag} ${msg}`;
+  if (!fields || Object.keys(fields).length === 0) return head;
+  const tail = Object.entries(fields).map(([k, v]) => {
+    const s = typeof v === "string" ? v : JSON.stringify(v);
+    return `${k}=${s}`;
+  }).join(" ");
+  return `${head}  ${tail}`;
+}
 
 function emit(level: Level, msg: string, fields?: Record<string, unknown>) {
   if (!shouldLog(level)) return;
-  const entry = {
-    ts: new Date().toISOString(),
-    level,
-    msg,
-    ...(fields || {}),
-  };
-  const line = JSON.stringify(entry);
+  const ts = new Date().toISOString();
+  let line: string;
+  if (FORMAT === "pretty") {
+    line = formatPretty(level, msg, fields, ts);
+  } else {
+    const entry = {
+      ts,
+      level,
+      levelnum: LEVELS[level],
+      service: SERVICE,
+      hostname: HOSTNAME,
+      pid: PID,
+      msg,
+      ...(fields || {}),
+    };
+    line = JSON.stringify(entry);
+  }
   if (level === "error") console.error(line);
   else if (level === "warn") console.warn(line);
   else console.log(line);

@@ -17,6 +17,9 @@ export interface CallPayload {
   messages: ChatMessage[];
   tools?: ToolDef[];
   thinkingLevel?: ThinkingLevel;
+  /** Optional abort signal — providers pass this to their HTTP client so a
+   * cancelled agent loop can stop the in-flight LLM request immediately. */
+  signal?: AbortSignal;
 }
 
 export interface LLMUsage {

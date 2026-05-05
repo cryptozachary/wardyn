@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import path from "path";
 import { loadKeys, storeKey } from "../security/keyVault.js";
+import { paths } from "../paths.js";
 
 export interface ChannelConfig {
   telegram?: { botToken: string };
@@ -8,7 +9,7 @@ export interface ChannelConfig {
   slack?: { botToken: string; signingSecret: string };
 }
 
-const CONFIG_PATH = path.join(process.cwd(), "config", "channels.json");
+const CONFIG_PATH = paths.config("channels.json");
 const VAULT_PREFIX = "channel:";
 
 let cached: ChannelConfig | null = null;

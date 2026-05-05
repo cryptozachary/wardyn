@@ -6,11 +6,11 @@
  */
 
 import { existsSync, readFileSync } from "fs";
-import path from "path";
 import { getDb } from "../db.js";
 import type { HeartbeatJob } from "./heartbeat.js";
+import { paths } from "../paths.js";
 
-const CONFIG_PATH = path.join(process.cwd(), "config", "heartbeat.json");
+const CONFIG_PATH = paths.config("heartbeat.json");
 
 /* ───────── Row ↔ HeartbeatJob ───────── */
 

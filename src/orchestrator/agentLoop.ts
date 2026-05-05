@@ -7,6 +7,7 @@ import { checkSafe } from "../security/safetySpine.js";
 import { auditLogger } from "../security/auditLog.js";
 import { checkLoop } from "../security/loopGuard.js";
 import { checkLLMQuota, checkSkillQuota } from "../security/quotaTracker.js";
+import { paths } from "../paths.js";
 import {
   Session, SessionMessage, ThinkingLevel, THINKING_LEVELS,
   getOrCreateSession, appendToSession, compactIfNeeded, saveSession
@@ -24,10 +25,9 @@ const THINKING_TRIGGER = /\b(?:\/?thinking(?:\s+level)?[:\s]+)(off|minimal|low|m
 // Strategist mode is persisted on Session.strategistMode — survives restarts.
 
 function loadContext(strategistActive: boolean) {
-  const memDir = path.join(process.cwd(), "memory");
-  const memPath = path.join(memDir, "MEMORY.md");
-  const soulPath = path.join(memDir, "SOUL.md");
-  const stratPath = path.join(memDir, "STRATEGIST.md");
+  const memPath = paths.memory("MEMORY.md");
+  const soulPath = paths.memory("SOUL.md");
+  const stratPath = paths.memory("STRATEGIST.md");
   const memory = existsSync(memPath) ? readFileSync(memPath, "utf8") : "";
   const soul = existsSync(soulPath) ? readFileSync(soulPath, "utf8") : "";
 
@@ -45,13 +45,57 @@ function sanitizeId(id: string): string {
 }
 
 function log(sessionId: string, data: any) {
-  const logDir = path.join(process.cwd(), "logs"); mkdirSync(logDir, { recursive: true });
+  const logDir = paths.logs(); mkdirSync(logDir, { recursive: true });
   appendFileSync(path.join(logDir, `${sanitizeId(sessionId)}.log`), JSON.stringify(data) + "\n");
 }
 
 export interface AgentLoopOptions {
   sessionId?: string;
   onStream?: OnStream;
+  /** Caller-supplied abort signal (e.g. WS disconnect). Composed with the
+   * process-wide shutdown signal, so callers don't have to track shutdown
+   * themselves. */
+  signal?: AbortSignal;
+}
+
+/**
+ * Process-wide abort controller. `abortAllAgentLoops()` signals every
+ * in-flight runAgentLoop call to stop at its next iteration boundary,
+ * cancelling any in-flight LLM HTTP request. Wired into Gateway shutdown.
+ */
+const shutdownAbort = new AbortController();
+export function abortAllAgentLoops(reason = "shutting down"): void {
+  if (!shutdownAbort.signal.aborted) shutdownAbort.abort(new Error(reason));
+}
+export function isShutdownAborted(): boolean {
+  return shutdownAbort.signal.aborted;
+}
+
+class AgentAbortError extends Error {
+  constructor(reason: string) { super(`agent loop cancelled: ${reason}`); this.name = "AgentAbortError"; }
+}
+
+function combineSignals(caller?: AbortSignal): AbortSignal {
+  if (!caller) return shutdownAbort.signal;
+  if (caller.aborted) return caller;
+  if (shutdownAbort.signal.aborted) return shutdownAbort.signal;
+  // Native AbortSignal.any when available (Node 20.3+). Fall back to a
+  // manual composition for older runtimes.
+  if (typeof (AbortSignal as any).any === "function") {
+    return (AbortSignal as any).any([caller, shutdownAbort.signal]);
+  }
+  const combined = new AbortController();
+  const onAbort = (s: AbortSignal) => () => combined.abort(s.reason);
+  caller.addEventListener("abort", onAbort(caller), { once: true });
+  shutdownAbort.signal.addEventListener("abort", onAbort(shutdownAbort.signal), { once: true });
+  return combined.signal;
+}
+
+function checkpointAbort(signal: AbortSignal): void {
+  if (signal.aborted) {
+    const reason = (signal.reason as Error)?.message ?? "aborted";
+    throw new AgentAbortError(reason);
+  }
 }
 
 export async function runAgentLoop(
@@ -63,13 +107,16 @@ export async function runAgentLoop(
   // Support both old signature (onStream callback) and new options object
   let sessionId: string | undefined;
   let onStream: OnStream | undefined;
+  let callerSignal: AbortSignal | undefined;
 
   if (typeof onStreamOrOpts === "function") {
     onStream = onStreamOrOpts;
   } else if (onStreamOrOpts) {
     sessionId = onStreamOrOpts.sessionId;
     onStream = onStreamOrOpts.onStream;
+    callerSignal = onStreamOrOpts.signal;
   }
+  const signal = combineSignals(callerSignal);
 
   // Load or create session — unified across all channels (single-user agent)
   const sid = sessionId ?? "default";
@@ -138,6 +185,8 @@ export async function runAgentLoop(
   const maxIterations = Number(process.env.AGENT_MAX_ITERATIONS) || 150;
   try {
   while (iterations++ < maxIterations) {
+    checkpointAbort(signal);
+
     // Per-user LLM quota check
     const quota = checkLLMQuota(msg.userId);
     if (!quota.allowed) {
@@ -150,7 +199,7 @@ export async function runAgentLoop(
 
     onStream?.({ type: "thinking", iteration: iterations });
 
-    const llmResponse = await callLLM({ messages, tools: toolDefs, thinkingLevel: session.thinkingLevel }, providerKey);
+    const llmResponse = await callLLM({ messages, tools: toolDefs, thinkingLevel: session.thinkingLevel, signal }, providerKey);
 
     if (!llmResponse.tool_calls) {
       log(msg.id, { final: llmResponse.text, toolResults });
@@ -171,6 +220,7 @@ export async function runAgentLoop(
 
     // Execute each tool call and append tool results as proper messages
     for (const tc of llmResponse.tool_calls) {
+      checkpointAbort(signal);
       let parsed: ToolCall;
       try {
         parsed = {
@@ -255,13 +305,20 @@ export async function runAgentLoop(
 
   return { final: finalText, toolResults, sessionId: sid };
   } catch (err: any) {
+    const aborted = err instanceof AgentAbortError
+      || err?.name === "AgentAbortError"
+      || err?.code === "ERR_CANCELED"
+      || err?.name === "CanceledError"
+      || err?.name === "AbortError";
     // Mid-chain failure (LLM provider error, network drop, rate limit, etc).
     // Persist a visible partial-response marker so the session isn't orphaned.
     const completedToolNames = toolResults.map(t => t.name).filter(Boolean);
-    const partialNote = completedToolNames.length > 0
-      ? `[Partial response — error after ${completedToolNames.length} tool call(s) (${completedToolNames.slice(-3).join(", ")}). Reason: ${err?.message ?? err}. You can retry.]`
-      : `[Error before any tool calls completed: ${err?.message ?? err}. You can retry.]`;
-    log(msg.id, { error: err?.message ?? String(err), toolResults });
+    const partialNote = aborted
+      ? `[Cancelled mid-turn after ${completedToolNames.length} tool call(s). You can retry.]`
+      : completedToolNames.length > 0
+        ? `[Partial response — error after ${completedToolNames.length} tool call(s) (${completedToolNames.slice(-3).join(", ")}). Reason: ${err?.message ?? err}. You can retry.]`
+        : `[Error before any tool calls completed: ${err?.message ?? err}. You can retry.]`;
+    log(msg.id, { error: err?.message ?? String(err), aborted, toolResults });
     appendToSession(session, { role: "assistant", content: partialNote, ts: Date.now() });
     saveSession(session);
     throw err;

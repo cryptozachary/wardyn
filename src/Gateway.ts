@@ -3,7 +3,7 @@ import bodyParser from "body-parser";
 import path from "path";
 import fs from "fs";
 import { loadSkills } from "./skills/loader.js";
-import { runAgentLoop } from "./orchestrator/agentLoop.js";
+import { runAgentLoop, abortAllAgentLoops } from "./orchestrator/agentLoop.js";
 import { Message } from "./types.js";
 import { loadKeys, storeKey } from "./security/keyVault.js";
 import { sendTelegramReply, extractChatId } from "./channels/telegram.js";
@@ -12,7 +12,7 @@ import { startWhatsapp, isWhatsappRunning } from "./channels/whatsapp.js";
 import { sendSlackReply, extractSlackChannelId, isSlackBotMessage, isSlackUrlVerification, isSlackMessageEvent, getSlackSigningSecret, verifySlackSignature } from "./channels/slack.js";
 import { loadChannelConfig, saveChannelConfig, getMaskedConfig, clearChannelConfigCache, migrateChannelSecrets } from "./channels/channelConfig.js";
 import { attachWebSocket } from "./channels/websocket.js";
-import { loadHeartbeatConfig, startHeartbeat, type HeartbeatController } from "./orchestrator/heartbeat.js";
+import { loadHeartbeatConfig, startHeartbeat, getHeartbeatHealth, type HeartbeatController } from "./orchestrator/heartbeat.js";
 import { seedFromJson, listJobs, getJob, createJob, updateJob, deleteJob } from "./orchestrator/heartbeatStore.js";
 import { listSessions, loadSession, cleanExpiredSessions, searchSessions, setThinkingLevel, THINKING_LEVELS, type ThinkingLevel } from "./orchestrator/sessionStore.js";
 import { pushCanvas, listCanvas, getCanvas, clearCanvas, pruneCanvas, type CanvasKind } from "./orchestrator/canvasStore.js";
@@ -50,6 +50,7 @@ import {
 import { verifyDiscordSignature } from "./channels/discord.js";
 import { sqliteRateLimit } from "./security/rateLimit.js";
 import { log, requestLogger as requestLoggerMiddleware, snapshotMetrics } from "./security/logger.js";
+import { paths } from "./paths.js";
 dotenv.config();
 
 assertProdAuthConfig();
@@ -175,7 +176,7 @@ app.get("/canvas", authForBrowser, (_req, res) => res.sendFile(path.join(APP_ROO
 // Serve skill output files with path traversal protection (auth-gated).
 // mkdir first so safeStatic's realpathSync doesn't throw on a fresh install
 // where the user-writable DATA_DIR hasn't been populated yet.
-const OUTPUT_DIR = path.join(process.cwd(), "output");
+const OUTPUT_DIR = paths.output();
 fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 app.use("/output", authForBrowser, ...safeStatic(OUTPUT_DIR));
 function normalizeTelegram(body: any): Message {
@@ -191,8 +192,7 @@ function normalizeSlack(body: any): Message {
 
 // --- Setup & configuration endpoints ---
 app.get("/api/setup/status", requireAuth, (_req, res) => {
-  const vaultPath = path.join(process.cwd(), "config", "providers.enc");
-  res.json({ hasVault: fs.existsSync(vaultPath) });
+  res.json({ hasVault: fs.existsSync(paths.config("providers.enc")) });
 });
 
 app.post("/api/setup/store-key", requireAuth, (req, res) => {
@@ -247,7 +247,7 @@ app.post("/api/setup/models", requireAuth, (req, res) => {
 
 // --- Ollama config ---
 app.get("/api/ollama/config", requireAuth, (_req, res) => {
-  const cfgPath = path.join(process.cwd(), "config", "ollama.json");
+  const cfgPath = paths.config("ollama.json");
   try {
     if (fs.existsSync(cfgPath)) {
       res.json(JSON.parse(fs.readFileSync(cfgPath, "utf8")));
@@ -265,9 +265,9 @@ app.post("/api/ollama/config", requireAuth, (req, res) => {
     return res.status(400).json({ ok: false, error: "url is required" });
   }
   try {
-    const cfgDir = path.join(process.cwd(), "config");
+    const cfgDir = paths.config();
     if (!fs.existsSync(cfgDir)) fs.mkdirSync(cfgDir, { recursive: true });
-    fs.writeFileSync(path.join(cfgDir, "ollama.json"), JSON.stringify({ url, model: model || "llama3.1" }, null, 2), "utf8");
+    fs.writeFileSync(paths.config("ollama.json"), JSON.stringify({ url, model: model || "llama3.1" }, null, 2), "utf8");
     res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: err.message });
@@ -289,8 +289,8 @@ app.post("/api/ollama/ping", requireAuth, async (req, res) => {
 
 app.get("/api/memory", requireAuth, (_req, res) => {
   try {
-    const memory = fs.readFileSync(path.join(process.cwd(), "memory", "MEMORY.md"), "utf8");
-    const soul = fs.readFileSync(path.join(process.cwd(), "memory", "SOUL.md"), "utf8");
+    const memory = fs.readFileSync(paths.memory("MEMORY.md"), "utf8");
+    const soul = fs.readFileSync(paths.memory("SOUL.md"), "utf8");
     res.json({ memory, soul });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: err.message });
@@ -303,8 +303,9 @@ app.post("/api/memory", requireAuth, (req, res) => {
     return res.status(400).json({ ok: false, error: "memory and soul must be strings" });
   }
   try {
-    fs.writeFileSync(path.join(process.cwd(), "memory", "MEMORY.md"), memory, "utf8");
-    fs.writeFileSync(path.join(process.cwd(), "memory", "SOUL.md"), soul, "utf8");
+    fs.mkdirSync(paths.memory(), { recursive: true });
+    fs.writeFileSync(paths.memory("MEMORY.md"), memory, "utf8");
+    fs.writeFileSync(paths.memory("SOUL.md"), soul, "utf8");
     res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: err.message });
@@ -977,6 +978,11 @@ app.post("/api/heartbeat/jobs/:name/trigger", requireAuth, async (req, res) => {
   }
 });
 
+app.get("/api/heartbeat/health", requireAuth, (_req, res) => {
+  const jobs = getHeartbeatHealth();
+  res.json({ ok: true, jobs, stalledCount: jobs.filter(j => j.stalled).length });
+});
+
 app.post("/api/heartbeat/reload", requireAuth, (_req, res) => {
   if (heartbeatCtrl) {
     heartbeatCtrl.reloadAll();
@@ -1067,7 +1073,7 @@ function buildHealthPayload(authenticated: boolean) {
   if (!authenticated) return basic;
 
   const channelCfg = loadChannelConfig();
-  const dbPath = path.join(process.cwd(), "data", "secureclaw.db");
+  const dbPath = paths.data("secureclaw.db");
   const dbSize = fs.existsSync(dbPath) ? fs.statSync(dbPath).size : 0;
   const uploadsSize = dirSizeBytes(UPLOADS_DIR);
   const sessionCount = (() => {
@@ -1099,6 +1105,7 @@ function buildHealthPayload(authenticated: boolean) {
       jobs: listJobs().length,
       enabled: listJobs(true).length,
       lastRun: lastHeartbeatRun(),
+      stalled: getHeartbeatHealth().filter(s => s.stalled).map(s => ({ name: s.name, reason: s.stallReason })),
     },
     storage: {
       dbSizeBytes: dbSize,
@@ -1234,6 +1241,9 @@ function gracefulShutdown(sig: string) {
     process.exit(1);
   }, 10_000);
   timer.unref();
+  // Cancel in-flight agent loops so their LLM HTTP calls abort immediately
+  // instead of holding the process open until the 10s force-exit timer.
+  try { abortAllAgentLoops(`shutdown:${sig}`); } catch {}
   try { heartbeatCtrl?.shutdown(); } catch {}
   const servers: Array<{ close: (cb?: (err?: Error) => void) => void }> = [server];
   if (adminServer) servers.push(adminServer);

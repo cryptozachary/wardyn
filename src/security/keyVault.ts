@@ -2,9 +2,9 @@ import { randomBytes, createCipheriv, createDecipheriv, scryptSync } from "crypt
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import path from "path";
 import { zeroBuffer } from "./zeroize.js";
+import { paths } from "../paths.js";
 function vaultPath(): string {
-  const base = process.env.DATA_DIR || process.cwd();
-  return path.join(base, "config", "providers.enc");
+  return paths.config("providers.enc");
 }
 const VAULT_PATH_LEGACY = path.join(process.cwd(), "config", "providers.enc");
 export function storeKey(name: string, value: string, passphrase: string) {

@@ -1,9 +1,9 @@
 import axios from "axios";
 import { readFileSync, existsSync } from "fs";
-import path from "path";
 import type { LLMProvider, CallPayload, LLMResponse } from "../types.js";
+import { paths } from "../../paths.js";
 
-const MODELS_PATH = path.join(process.cwd(), "config", "models.json");
+const MODELS_PATH = paths.config("models.json");
 const API_URL = "https://api.anthropic.com/v1/messages";
 
 function getModel(): string {
@@ -52,7 +52,8 @@ export const anthropicProvider: LLMProvider = {
         "x-api-key": apiKey,
         "anthropic-version": "2023-06-01",
         "content-type": "application/json"
-      }
+      },
+      signal: payload.signal,
     });
 
     return parseResponse(res.data, getModel());

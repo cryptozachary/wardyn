@@ -13,8 +13,9 @@ import type { BuilderResult } from "../builder/types.js";
 import { writeSkill } from "../builder/skillWriter.js";
 import type { ASTWarning } from "./astAnalyzer.js";
 import { getDb } from "../db.js";
+import { paths } from "../paths.js";
 
-const PENDING_DIR = path.join(process.cwd(), "skills_pending");
+const PENDING_DIR = paths.skillsPending();
 
 /* ───────── Types ───────── */
 

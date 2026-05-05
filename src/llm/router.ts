@@ -6,6 +6,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import path from "path";
 import { loadKeys } from "../security/keyVault.js";
 import { recordUsage, isBudgetExceeded } from "./usageStore.js";
+import { paths } from "../paths.js";
 
 export interface CallContext {
   sessionId?: string;
@@ -19,8 +20,8 @@ const providers: Record<string, LLMProvider> = {
 };
 
 const ENV_PROVIDER = process.env.LLM_PROVIDER || "openai";
-const PROVIDER_CONFIG_PATH = path.join(process.cwd(), "config", "provider.json");
-const MODELS_CONFIG_PATH = path.join(process.cwd(), "config", "models.json");
+const PROVIDER_CONFIG_PATH = paths.config("provider.json");
+const MODELS_CONFIG_PATH = paths.config("models.json");
 
 // Fallback order: try primary, then each fallback in sequence
 const FALLBACK_ORDER: string[] = (process.env.LLM_FALLBACK_ORDER || "openai,anthropic,ollama")
@@ -41,7 +42,7 @@ export function getProviderName(): string {
 
 export function setProviderName(name: string): void {
   if (!providers[name]) throw new Error(`Unknown provider: "${name}". Available: ${Object.keys(providers).join(", ")}`);
-  const cfgDir = path.join(process.cwd(), "config");
+  const cfgDir = paths.config();
   if (!existsSync(cfgDir)) mkdirSync(cfgDir, { recursive: true });
   writeFileSync(PROVIDER_CONFIG_PATH, JSON.stringify({ provider: name }, null, 2), "utf8");
 }
@@ -62,9 +63,10 @@ export function getModelConfig(): Record<string, string> {
     } catch {}
   }
   // Ollama model is in its own config
-  if (existsSync(path.join(process.cwd(), "config", "ollama.json"))) {
+  const ollamaCfgPath = paths.config("ollama.json");
+  if (existsSync(ollamaCfgPath)) {
     try {
-      const ollCfg = JSON.parse(readFileSync(path.join(process.cwd(), "config", "ollama.json"), "utf8"));
+      const ollCfg = JSON.parse(readFileSync(ollamaCfgPath, "utf8"));
       if (ollCfg.model) cfg.ollama = ollCfg.model;
     } catch {}
   }
@@ -73,7 +75,7 @@ export function getModelConfig(): Record<string, string> {
 
 export function setModel(provider: string, model: string): void {
   if (!model || typeof model !== "string") throw new Error("model is required");
-  const cfgDir = path.join(process.cwd(), "config");
+  const cfgDir = paths.config();
   if (!existsSync(cfgDir)) mkdirSync(cfgDir, { recursive: true });
 
   let existing: Record<string, string> = {};

@@ -13,8 +13,9 @@ import { mkdirSync } from "fs";
 import { runAgentLoop } from "../orchestrator/agentLoop.js";
 import type { Message, SkillMeta } from "../types.js";
 import { checkPairing, pairingMessage } from "../security/pairingGuard.js";
+import { paths } from "../paths.js";
 
-const AUTH_DIR = path.join(process.cwd(), "data", "whatsapp-auth");
+const AUTH_DIR = paths.data("whatsapp-auth");
 const SELF_ECHO_GUARD = new Set<string>();
 
 let sock: any = null;

@@ -38,10 +38,14 @@ Open `http://127.0.0.1:3000/login` and sign in with the `API_TOKEN`.
 | Slack signing secret | per channel | — | Stored in encrypted vault (`config/providers.enc`). Required for `/webhook/slack`. |
 | `ENABLE_HSTS` | no | off (on in prod) | Forces `Strict-Transport-Security` even in dev. |
 | `LOG_LEVEL` | no | `info` | One of `debug`/`info`/`warn`/`error`. |
+| `LOG_FORMAT` | no | `json` | `json` (one record per line, shipper-friendly) or `pretty` (color-tagged human terminal output). |
+| `LOG_SERVICE` | no | `wardyn` | `service` field stamped on every JSON record — disambiguates multi-process deployments in Loki/Datadog/etc. |
 | `AUDIT_RETENTION_DAYS` | no | `90` | Audit events older than this are pruned every 6h. Hash-chain head is re-seeded from the newest survivor. |
 | `CANVAS_RETENTION_DAYS` | no | `7` | Canvas items older than this are pruned every 6h. |
 | `CANVAS_MAX_ITEMS` | no | `5000` | Hard cap on total canvas rows after age prune. |
 | `LLM_DAILY_BUDGET_USD` | no | — | If set, LLM calls are refused once the last 24h of `llm_usage` rows exceed this budget. |
+| `HEARTBEAT_STALL_FACTOR` | no | `3` | A heartbeat job is considered stalled when its last success is older than `intervalMs × this`. |
+| `HEARTBEAT_STALL_FAILURES` | no | `5` | Consecutive failures after which a job is reported as stalled. |
 | `WARDYN_AUTOUPDATE` | no | on (packaged) | Set to `0` to disable Electron auto-update checks. |
 | `WARDYN_UPDATE_URL` | no | `publish` in package.json | Override the update feed URL at runtime. |
 | `WARDYN_ALLOWED_ORIGINS` | no | loopback only | Comma-separated extra Origins permitted to open cookie-auth WebSockets. Default allows `http(s)://{HOST,127.0.0.1,localhost}:{PORT,ADMIN_PORT}` plus `file://` (Electron). Token-auth WS connections bypass this check. |
@@ -272,6 +276,26 @@ Telegram, Discord, and Slack all use first-party APIs and are not subject to
 this caveat.
 
 ## Operations
+
+### Filesystem layout
+
+All runtime state resolves from `DATA_DIR` (default: `process.cwd()`).
+Set it explicitly when deploying under systemd or any runner that
+doesn't anchor cwd — it removes the need for `WorkingDirectory=`:
+
+```
+$DATA_DIR/
+  config/                    # providers.enc, channels.json, models.json, ...
+  secureclaw.db              # SQLite (DATA_DIR set) — or <cwd>/data/secureclaw.db in dev
+  logs/  sessions/  uploads/
+  output/  memory/  sandbox/
+  skills_pending/  backups/  hub/
+```
+
+Read-only resources (the `public/` UI, bundled `skills/`) resolve from
+`APP_ROOT` (default: `process.cwd()`). The Electron packaging sets
+`APP_ROOT` to the resource tree and `DATA_DIR` to the per-user appData
+path so both points are correctly separated for installed builds.
 
 ### Audit chain
 
