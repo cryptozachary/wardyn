@@ -20,14 +20,14 @@
  *      the resulting cookie into the main BrowserWindow's session, then
  *      load http://127.0.0.1:PORT/ui/.
  */
-import { app, BrowserWindow, Menu, ipcMain, session } from "electron";
+import { app, BrowserWindow, Menu, ipcMain, session, dialog } from "electron";
 import { spawn, spawnSync, ChildProcess } from "child_process";
 import { randomBytes } from "crypto";
 import { existsSync, promises as fs, openSync } from "fs";
 import http from "http";
 import path from "path";
 import { fileURLToPath } from "url";
-import { loadBootstrap, saveBootstrap } from "./keychain.js";
+import { loadBootstrap, saveBootstrap, clearBootstrap } from "./keychain.js";
 import { loadKeys, storeKey } from "../src/security/keyVault.js";
 import { setupAutoUpdate } from "./autoUpdate.js";
 
@@ -141,6 +141,7 @@ async function showUnlockWindow(): Promise<string> {
         unlockWindow?.close();
         unlockWindow = null;
         ipcMain.removeHandler("unlock:submit");
+        ipcMain.removeHandler("unlock:reset");
         resolve(passphrase);
         return { ok: true };
       } catch {
@@ -148,8 +149,46 @@ async function showUnlockWindow(): Promise<string> {
       }
     });
 
+    // Forgot-passphrase escape hatch. Wipes the vault + bootstrap blob and
+    // relaunches into first-run setup. Provider keys, channel tokens, and
+    // the API token are gone; the SQLite DB, skills, and other config
+    // survive. Confirmed via a native modal dialog so an accidental click
+    // can't nuke the vault.
+    ipcMain.handle("unlock:reset", async () => {
+      if (!unlockWindow) return { ok: false, error: "no window" };
+      const choice = await dialog.showMessageBox(unlockWindow, {
+        type: "warning",
+        buttons: ["Cancel", "Reset vault"],
+        defaultId: 0,
+        cancelId: 0,
+        title: "Reset vault?",
+        message: "Reset the encrypted vault?",
+        detail:
+          "This permanently deletes the encrypted vault and the stored API token, " +
+          "then restarts Wardyn into first-run setup.\n\n" +
+          "LOST: every API key and channel token in the vault (OpenAI, Anthropic, " +
+          "Slack, Discord, exchange creds, etc.). You will need to re-enter them.\n\n" +
+          "KEPT: the SQLite database (chat history, audit logs, memory), skills, " +
+          "and other configuration files.\n\n" +
+          "This cannot be undone.",
+      });
+      if (choice.response !== 1) return { ok: false, cancelled: true };
+      try {
+        if (existsSync(VAULT_PATH)) await fs.unlink(VAULT_PATH);
+        await clearBootstrap();
+      } catch (err: any) {
+        return { ok: false, error: err.message };
+      }
+      ipcMain.removeHandler("unlock:submit");
+      ipcMain.removeHandler("unlock:reset");
+      app.relaunch();
+      app.exit(0);
+      return { ok: true };
+    });
+
     unlockWindow.on("closed", () => {
       ipcMain.removeHandler("unlock:submit");
+      ipcMain.removeHandler("unlock:reset");
       if (unlockWindow) reject(new CancelledError("Unlock cancelled"));
     });
   });
