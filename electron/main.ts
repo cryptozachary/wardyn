@@ -98,7 +98,14 @@ async function showSetupWindow(): Promise<{ passphrase: string; apiToken: string
     setupWindow = new BrowserWindow({ ...windowOpts(520, 560), title: "Wardyn — First-run setup" });
     setupWindow.loadFile(path.join(__dirname, "setup.html"));
 
-    ipcMain.handleOnce("setup:submit", async (_evt, { passphrase }: { passphrase: string }) => {
+    // Sentinel: once setup succeeds we hold the result here and let the
+    // window stay open so the user can read/copy the API token. Boot only
+    // proceeds when the renderer's Continue button fires window.close(),
+    // which the closed handler turns into resolve().
+    let setupResult: { passphrase: string; apiToken: string; cookieSecret: string } | null = null;
+
+    ipcMain.handle("setup:submit", async (_evt, { passphrase }: { passphrase: string }) => {
+      if (setupResult) return { ok: true, apiToken: setupResult.apiToken };
       try {
         const weakReason = checkPassphraseStrength(passphrase);
         if (weakReason) throw new Error(weakReason);
@@ -109,23 +116,23 @@ async function showSetupWindow(): Promise<{ passphrase: string; apiToken: string
         // and can be round-tripped during subsequent unlock attempts.
         storeKey("_init", "ok", passphrase);
         await saveBootstrap({ apiToken, cookieSecret });
-        setupWindow?.close();
-        setupWindow = null;
-        resolve({ passphrase, apiToken, cookieSecret });
+        setupResult = { passphrase, apiToken, cookieSecret };
         return { ok: true, apiToken };
       } catch (err: any) {
         return { ok: false, error: err.message };
       }
     });
 
-    ipcMain.handleOnce("setup:cancel", () => {
+    ipcMain.handle("setup:cancel", () => {
       setupWindow?.close();
-      setupWindow = null;
-      reject(new CancelledError("Setup cancelled"));
     });
 
     setupWindow.on("closed", () => {
-      if (setupWindow) reject(new CancelledError("Setup window closed"));
+      setupWindow = null;
+      ipcMain.removeHandler("setup:submit");
+      ipcMain.removeHandler("setup:cancel");
+      if (setupResult) resolve(setupResult);
+      else reject(new CancelledError("Setup window closed"));
     });
   });
 }
@@ -144,7 +151,13 @@ async function showUnlockWindow(): Promise<string> {
         ipcMain.removeHandler("unlock:reset");
         resolve(passphrase);
         return { ok: true };
-      } catch {
+      } catch (err: any) {
+        // ENOENT means we're looking at the wrong path, not a wrong passphrase.
+        // Surface that distinctly so a config bug doesn't masquerade as auth failure.
+        if (err?.code === "ENOENT") {
+          console.error(`[electron] unlock: vault file not found at expected path: ${err.path}`);
+          return { ok: false, error: "Vault file not found — see gateway.log" };
+        }
         return { ok: false, error: "Incorrect passphrase" };
       }
     });

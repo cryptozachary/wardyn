@@ -22,31 +22,35 @@
 import path from "path";
 import { existsSync, mkdirSync } from "fs";
 
-const DATA_DIR = process.env.DATA_DIR || process.cwd();
-const APP_ROOT = process.env.APP_ROOT || process.cwd();
+// Resolve roots lazily on every call. Capturing them at module load time
+// breaks Electron's main process: ESM hoisting evaluates this module before
+// main.ts can set process.env.DATA_DIR, so a captured DATA_DIR would be the
+// (wrong) launch cwd of the .exe instead of app.getPath("userData").
+const dataDir = (): string => process.env.DATA_DIR || process.cwd();
+const appRoot = (): string => process.env.APP_ROOT || process.cwd();
 
 // `paths.data(...)` mirrors `db.ts/resolveDbPath`:
 //   - when DATA_DIR is set (Electron, systemd) the SQLite DB and adjacent
 //     blobs live directly in DATA_DIR (no `data/` subdir).
 //   - in dev (no DATA_DIR), they live in `<cwd>/data/` as before.
 // Other directories (config, logs, sessions, …) are always under DATA_DIR.
-const DB_DIR = process.env.DATA_DIR ? DATA_DIR : path.join(DATA_DIR, "data");
+const dbDir = (): string => process.env.DATA_DIR ? dataDir() : path.join(dataDir(), "data");
 
 export const paths = {
-  dataDir: DATA_DIR,
-  appRoot: APP_ROOT,
-  config: (...rest: string[]) => path.join(DATA_DIR, "config", ...rest),
-  data: (...rest: string[]) => path.join(DB_DIR, ...rest),
-  logs: (...rest: string[]) => path.join(DATA_DIR, "logs", ...rest),
-  sessions: (...rest: string[]) => path.join(DATA_DIR, "sessions", ...rest),
-  uploads: (...rest: string[]) => path.join(DATA_DIR, "uploads", ...rest),
-  output: (...rest: string[]) => path.join(DATA_DIR, "output", ...rest),
-  memory: (...rest: string[]) => path.join(DATA_DIR, "memory", ...rest),
-  sandbox: (...rest: string[]) => path.join(DATA_DIR, "sandbox", ...rest),
-  skillsPending: (...rest: string[]) => path.join(DATA_DIR, "skills_pending", ...rest),
-  backups: (...rest: string[]) => path.join(DATA_DIR, "backups", ...rest),
-  hub: (...rest: string[]) => path.join(DATA_DIR, "hub", ...rest),
-  public: (...rest: string[]) => path.join(APP_ROOT, "public", ...rest),
+  get dataDir() { return dataDir(); },
+  get appRoot() { return appRoot(); },
+  config: (...rest: string[]) => path.join(dataDir(), "config", ...rest),
+  data: (...rest: string[]) => path.join(dbDir(), ...rest),
+  logs: (...rest: string[]) => path.join(dataDir(), "logs", ...rest),
+  sessions: (...rest: string[]) => path.join(dataDir(), "sessions", ...rest),
+  uploads: (...rest: string[]) => path.join(dataDir(), "uploads", ...rest),
+  output: (...rest: string[]) => path.join(dataDir(), "output", ...rest),
+  memory: (...rest: string[]) => path.join(dataDir(), "memory", ...rest),
+  sandbox: (...rest: string[]) => path.join(dataDir(), "sandbox", ...rest),
+  skillsPending: (...rest: string[]) => path.join(dataDir(), "skills_pending", ...rest),
+  backups: (...rest: string[]) => path.join(dataDir(), "backups", ...rest),
+  hub: (...rest: string[]) => path.join(dataDir(), "hub", ...rest),
+  public: (...rest: string[]) => path.join(appRoot(), "public", ...rest),
 };
 
 export function ensureDir(p: string): string {

@@ -21,7 +21,7 @@ export interface SettingDef {
   max?: number;
   description: string;
   /** Human-friendly group for the UI. */
-  group: "llm" | "retention";
+  group: "llm" | "retention" | "quota";
 }
 
 /**
@@ -36,6 +36,24 @@ export const SETTING_DEFS: SettingDef[] = [
     max: 1_000_000,
     description: "Refuse LLM calls once the last 24h of spend reaches this USD amount. Blank = no cap.",
     group: "llm",
+  },
+  {
+    key: "USER_QUOTA_LLM",
+    kind: "number",
+    default: 100,
+    min: 1,
+    max: 1_000_000,
+    description: "Max LLM calls per user in a sliding 1-hour window. Calls beyond this are rejected until the window rolls.",
+    group: "quota",
+  },
+  {
+    key: "USER_QUOTA_EXPENSIVE",
+    kind: "number",
+    default: 120,
+    min: 1,
+    max: 1_000_000,
+    description: "Max expensive-skill calls (browser, image_gen, code_runner, market_scanner, email) per user in a sliding 1-hour window. Shared across all five.",
+    group: "quota",
   },
   {
     key: "AUDIT_RETENTION_DAYS",

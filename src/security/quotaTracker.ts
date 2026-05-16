@@ -2,11 +2,14 @@
  * Per-user quota tracking backed by SQLite.
  * Persists across restarts. Sliding 1-hour window.
  *
- * Defaults: 100 LLM calls/hour, 20 expensive skill calls/hour per user.
- * Configurable via env: USER_QUOTA_LLM, USER_QUOTA_EXPENSIVE.
+ * Defaults: 100 LLM calls/hour, 120 expensive skill calls/hour per user.
+ * Configurable at runtime via settings (USER_QUOTA_LLM, USER_QUOTA_EXPENSIVE) —
+ * settingsStore resolves DB override → env → default on each lookup, so changes
+ * from the Settings UI take effect on the next quota check without a restart.
  */
 
 import { getDb } from "../db.js";
+import { getSettingNumber } from "./settingsStore.js";
 
 export interface QuotaConfig {
   llmCallsPerHour: number;
@@ -34,10 +37,13 @@ const EXPENSIVE_SKILLS = new Set([
 
 const WINDOW_MS = 3_600_000; // 1 hour
 
-const config: QuotaConfig = {
-  llmCallsPerHour: Number(process.env.USER_QUOTA_LLM) || 100,
-  expensiveSkillsPerHour: Number(process.env.USER_QUOTA_EXPENSIVE) || 120,
-};
+function llmLimit(): number {
+  return getSettingNumber("USER_QUOTA_LLM") ?? 100;
+}
+
+function expensiveLimit(): number {
+  return getSettingNumber("USER_QUOTA_EXPENSIVE") ?? 120;
+}
 
 function countRecent(userId: string, kind: string, now: number): number {
   const db = getDb();
@@ -66,8 +72,9 @@ function record(userId: string, kind: string, now: number): void {
 export function checkLLMQuota(userId: string): { allowed: boolean; remaining: number; resetInMs: number } {
   const now = Date.now();
   const count = countRecent(userId, "llm", now);
+  const limit = llmLimit();
 
-  if (count >= config.llmCallsPerHour) {
+  if (count >= limit) {
     const oldest = oldestTs(userId, "llm", now);
     return { allowed: false, remaining: 0, resetInMs: oldest ? WINDOW_MS - (now - oldest) : WINDOW_MS };
   }
@@ -76,28 +83,29 @@ export function checkLLMQuota(userId: string): { allowed: boolean; remaining: nu
   const oldest = oldestTs(userId, "llm", now);
   return {
     allowed: true,
-    remaining: config.llmCallsPerHour - count - 1,
+    remaining: limit - count - 1,
     resetInMs: oldest ? WINDOW_MS - (now - oldest) : WINDOW_MS,
   };
 }
 
 /** Check and record an expensive skill call. Returns { allowed, remaining }. */
 export function checkSkillQuota(userId: string, skillName: string): { allowed: boolean; remaining: number; isExpensive: boolean } {
+  const limit = expensiveLimit();
   if (!EXPENSIVE_SKILLS.has(skillName)) {
-    return { allowed: true, remaining: config.expensiveSkillsPerHour, isExpensive: false };
+    return { allowed: true, remaining: limit, isExpensive: false };
   }
 
   const now = Date.now();
   const count = countRecent(userId, "expensive", now);
 
-  if (count >= config.expensiveSkillsPerHour) {
+  if (count >= limit) {
     return { allowed: false, remaining: 0, isExpensive: true };
   }
 
   record(userId, "expensive", now);
   return {
     allowed: true,
-    remaining: config.expensiveSkillsPerHour - count - 1,
+    remaining: limit - count - 1,
     isExpensive: true,
   };
 }
@@ -108,15 +116,17 @@ export function getQuotaStatus(userId: string): QuotaStatus {
   const llmCount = countRecent(userId, "llm", now);
   const expensiveCount = countRecent(userId, "expensive", now);
   const oldest = oldestTs(userId, "llm", now);
+  const llmCap = llmLimit();
+  const expensiveCap = expensiveLimit();
 
   return {
     userId,
     llmCalls: llmCount,
-    llmLimit: config.llmCallsPerHour,
-    llmRemaining: Math.max(0, config.llmCallsPerHour - llmCount),
+    llmLimit: llmCap,
+    llmRemaining: Math.max(0, llmCap - llmCount),
     expensiveCalls: expensiveCount,
-    expensiveLimit: config.expensiveSkillsPerHour,
-    expensiveRemaining: Math.max(0, config.expensiveSkillsPerHour - expensiveCount),
+    expensiveLimit: expensiveCap,
+    expensiveRemaining: Math.max(0, expensiveCap - expensiveCount),
     resetInMs: oldest ? WINDOW_MS - (now - oldest) : WINDOW_MS,
   };
 }
