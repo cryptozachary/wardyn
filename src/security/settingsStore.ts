@@ -21,7 +21,7 @@ export interface SettingDef {
   max?: number;
   description: string;
   /** Human-friendly group for the UI. */
-  group: "llm" | "retention" | "quota";
+  group: "llm" | "retention" | "quota" | "security";
 }
 
 /**
@@ -54,6 +54,15 @@ export const SETTING_DEFS: SettingDef[] = [
     max: 1_000_000,
     description: "Max expensive-skill calls (browser, image_gen, code_runner, market_scanner, email) per user in a sliding 1-hour window. Shared across all five.",
     group: "quota",
+  },
+  {
+    key: "SESSION_TTL_HOURS",
+    kind: "number",
+    default: 168,
+    min: 1,
+    max: 8760,
+    description: "Lifetime of the browser session cookie. After this many hours of no re-issue, the next UI request bounces through /login. Takes effect on the next sign-in.",
+    group: "security",
   },
   {
     key: "AUDIT_RETENTION_DAYS",

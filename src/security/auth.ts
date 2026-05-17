@@ -1,10 +1,20 @@
 import type { Request, Response, NextFunction } from "express";
 import { createHmac, randomBytes, timingSafeEqual } from "crypto";
+import { getSettingNumber, getSettingDef } from "./settingsStore.js";
 
 const COOKIE_NAME = "wardyn_auth";
 const CSRF_COOKIE = "wardyn_csrf";
 const CSRF_HEADER = "x-csrf-token";
-const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+
+function sessionTtlMs(): number {
+  const def = getSettingDef("SESSION_TTL_HOURS");
+  const fallback = (typeof def?.default === "number" ? def.default : 168) * 3600 * 1000;
+  try {
+    const hours = getSettingNumber("SESSION_TTL_HOURS");
+    if (hours != null && Number.isFinite(hours) && hours > 0) return hours * 3600 * 1000;
+  } catch {}
+  return fallback;
+}
 
 const isProd = () => process.env.NODE_ENV === "production";
 
@@ -38,15 +48,17 @@ function safeEq(a: string, b: string): boolean {
 
 export function issueSessionCookie(res: Response): string {
   const cfg = getAuthConfig();
-  const expires = Date.now() + SESSION_TTL_MS;
+  const ttlMs = sessionTtlMs();
+  const expires = Date.now() + ttlMs;
   const payload = `${expires}.${randomBytes(16).toString("hex")}`;
   const token = `${payload}.${sign(payload, cfg.cookieSecret)}`;
-  const flags = ["HttpOnly", "SameSite=Strict", "Path=/", `Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`];
+  const maxAge = Math.floor(ttlMs / 1000);
+  const flags = ["HttpOnly", "SameSite=Strict", "Path=/", `Max-Age=${maxAge}`];
   if (isProd()) flags.push("Secure");
   res.append("Set-Cookie", `${COOKIE_NAME}=${token}; ${flags.join("; ")}`);
 
   const csrf = randomBytes(24).toString("hex");
-  const csrfFlags = ["SameSite=Strict", "Path=/", `Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`];
+  const csrfFlags = ["SameSite=Strict", "Path=/", `Max-Age=${maxAge}`];
   if (isProd()) csrfFlags.push("Secure");
   res.append("Set-Cookie", `${CSRF_COOKIE}=${csrf}; ${csrfFlags.join("; ")}`);
   return token;

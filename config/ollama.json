@@ -1,4 +1,4 @@
 {
-  "url": "http://localhost:11434",
-  "model": "qwen3:14b"
+  "url": "http://192.168.1.202:11434",
+  "model": "claude-9b:latest"
 }
