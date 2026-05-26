@@ -142,6 +142,10 @@ function runCode(interpreter: string, code: string, timeout: number, interpName:
 
 function runShell(interp: string[], command: string, timeout: number): Promise<string> {
   return new Promise((resolve, reject) => {
+    if (process.platform === "win32" && (interp[0] === "bash" || interp[0] === "sh")) {
+      reject(new Error(`POSIX shells (${interp[0]}) are not available on Windows. Use interpreter "node", "python", or "python3" instead.`));
+      return;
+    }
     const proc = spawn(interp[0], [...interp.slice(1), command], {
       cwd: SANDBOX_DIR,
       timeout,

@@ -61,12 +61,17 @@ const DEFAULT_PRICES: Record<string, PriceRow> = {
   "gpt-4o":      { input: 2.50, output: 10.00 },
 
   // ───── Anthropic Claude family (USD / 1M tokens, 5m-TTL cache writes) ─────
-  "claude-sonnet-4-6": { input: 3.00,  cachedInput: 0.30, cacheWrite: 3.75,  output: 15.00 },
-  "claude-opus-4-7":   { input: 5.00,  cachedInput: 0.50, cacheWrite: 6.25,  output: 25.00 },
-  "claude-opus-4-6":   { input: 5.00,  cachedInput: 0.50, cacheWrite: 6.25,  output: 25.00 },
-  "claude-opus-4-5":   { input: 5.00,  cachedInput: 0.50, cacheWrite: 6.25,  output: 25.00 },
-  "claude-opus-4-1":   { input: 15.00, cachedInput: 1.50, cacheWrite: 18.75, output: 75.00 },
-  "claude-opus-4":     { input: 15.00, cachedInput: 1.50, cacheWrite: 18.75, output: 75.00 },
+  // Source: https://platform.claude.com/docs/en/about-claude/pricing
+  "claude-opus-4-7":    { input: 5.00,  cachedInput: 0.50, cacheWrite: 6.25,  output: 25.00 },
+  "claude-opus-4-6":    { input: 5.00,  cachedInput: 0.50, cacheWrite: 6.25,  output: 25.00 },
+  "claude-opus-4-5":    { input: 5.00,  cachedInput: 0.50, cacheWrite: 6.25,  output: 25.00 },
+  "claude-opus-4-1":    { input: 15.00, cachedInput: 1.50, cacheWrite: 18.75, output: 75.00 },
+  "claude-opus-4":      { input: 15.00, cachedInput: 1.50, cacheWrite: 18.75, output: 75.00 },
+  "claude-sonnet-4-6":  { input: 3.00,  cachedInput: 0.30, cacheWrite: 3.75,  output: 15.00 },
+  "claude-sonnet-4-5":  { input: 3.00,  cachedInput: 0.30, cacheWrite: 3.75,  output: 15.00 },
+  "claude-sonnet-4":    { input: 3.00,  cachedInput: 0.30, cacheWrite: 3.75,  output: 15.00 },
+  "claude-haiku-4-5":   { input: 1.00,  cachedInput: 0.10, cacheWrite: 1.25,  output: 5.00 },
+  "claude-haiku-3-5":   { input: 0.80,  cachedInput: 0.08, cacheWrite: 1.00,  output: 4.00 },
 };
 
 let priceCache: Record<string, PriceRow> | null = null;
